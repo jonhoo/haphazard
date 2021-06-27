@@ -21,6 +21,7 @@ static SHARED_DOMAIN: HazPtrDomain = HazPtrDomain {
 };
 
 fn shared_domain() -> Pin<&'static HazPtrDomain> {
+    // Safety: `SHARED_DOMAIN` is a static
     unsafe { Pin::new_unchecked(&SHARED_DOMAIN) }
 }
 
@@ -243,9 +244,10 @@ impl HazPtrDomain {
         let head_ptr = &self.hazptrs.head;
         let mut node = head_ptr.load(Ordering::SeqCst);
         loop {
-            // Safety: HazPtrs are never de-allocated.
+            // Safety: HazPtrs are only de-allocated in `HazPtrDomain::drop`
+            // but we have shared access so the domain can't be dropped.
             while !node.is_null() && unsafe { &*node }.active.load(Ordering::SeqCst) {
-                // Safety: HazPtrs are never de-allocated.
+                // Safety: HazPtrs are never de-allocated (see above).
                 node = unsafe { &*node }.next.load(Ordering::SeqCst);
             }
             if node.is_null() {
@@ -267,7 +269,7 @@ impl HazPtrDomain {
                         Ordering::SeqCst,
                     ) {
                         Ok(_) => {
-                            // Safety: HazPtrs are never de-allocated.
+                            // Safety: HazPtrs are never de-allocated (see above).
                             break unsafe { &*hazptr };
                         }
                         Err(head_now) => {
@@ -277,7 +279,7 @@ impl HazPtrDomain {
                     }
                 };
             } else {
-                // Safety: HazPtrs are never de-allocated.
+                // Safety: HazPtrs are never de-allocated (see above).
                 let node = unsafe { &*node };
                 if node
                     .active
@@ -345,7 +347,8 @@ impl HazPtrDomain {
         let mut guarded_ptrs = HashSet::new();
         let mut node = self.hazptrs.head.load(Ordering::SeqCst);
         while !node.is_null() {
-            // Safety: HazPtrs are never de-allocated.
+            // Safety: HazPtrs are only de-allocated in `HazPtrDomain::drop`
+            // but we have shared access so the domain can't be dropped.
             let n = unsafe { &*node };
             guarded_ptrs.insert(n.ptr.load(Ordering::SeqCst));
             node = n.next.load(Ordering::SeqCst);
@@ -576,7 +579,7 @@ mod tests {
         // Safety:
         //
         //  1. The pointer came from Box, so is valid.
-        //  2. The value is no longer accessible.
+        //  2. We never access `x` again after retiring it.
         //  3. The deleter is valid for Box types.
         unsafe { x.load(Ordering::SeqCst).retire(&deleters::drop_box) };
         assert_eq!(drops_9001.current(), 1);

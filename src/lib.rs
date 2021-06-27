@@ -279,7 +279,7 @@ impl HazPtrDomain {
         self.bulk_reclaim(0, block)
     }
 
-    fn bulk_reclaim(&self, mut reclaimed: usize, block: bool) -> usize {
+    fn bulk_reclaim(&self, prev_reclaimed: usize, block: bool) -> usize {
         let steal = self
             .retired
             .head
@@ -303,6 +303,7 @@ impl HazPtrDomain {
         let mut node = steal;
         let mut remaining = std::ptr::null_mut();
         let mut tail = None;
+        let mut reclaimed: usize = 0;
         while !node.is_null() {
             // Safety: All accessors only access the head, and the head is no longer pointing here.
             let mut n = unsafe { Box::from_raw(node) };
@@ -323,13 +324,14 @@ impl HazPtrDomain {
         }
 
         self.retired.count.fetch_sub(reclaimed, Ordering::SeqCst);
+        let total_reclaimed = prev_reclaimed + reclaimed;
 
         let tail = if let Some(tail) = tail {
             assert!(!remaining.is_null());
             tail
         } else {
             assert!(remaining.is_null());
-            return reclaimed;
+            return total_reclaimed;
         };
 
         let head_ptr = &self.retired.head;
@@ -355,10 +357,10 @@ impl HazPtrDomain {
             // Caller wants to reclaim _everything_, but some were left, so try again.
             std::thread::yield_now();
             // NOTE: Allows tail recursion by passing down reclaimed
-            return self.bulk_reclaim(reclaimed, true);
+            return self.bulk_reclaim(total_reclaimed, true);
         }
 
-        reclaimed
+        total_reclaimed
     }
 }
 

@@ -1,9 +1,12 @@
 #![feature(arbitrary_self_types)]
+#![feature(negative_impls)]
 #![deny(unsafe_op_in_unsafe_fn)]
 #![allow(dead_code)]
 
 use std::collections::HashSet;
 use std::ops::{Deref, DerefMut};
+use std::pin::Pin;
+use std::ptr::NonNull;
 use std::sync::atomic::Ordering;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize};
 
@@ -17,16 +20,22 @@ static SHARED_DOMAIN: HazPtrDomain = HazPtrDomain {
     },
 };
 
-#[derive(Default)]
-pub struct HazPtrHolder(Option<&'static HazPtr>);
+fn shared_domain() -> Pin<&'static HazPtrDomain> {
+    unsafe { Pin::new_unchecked(&SHARED_DOMAIN) }
+}
 
-impl HazPtrHolder {
+pub struct HazPtrHolder<'domain> {
+    domain: Pin<&'domain HazPtrDomain>,
+    hazptr: Option<&'static HazPtr>,
+}
+
+impl HazPtrHolder<'_> {
     fn hazptr(&mut self) -> &'static HazPtr {
-        if let Some(hazptr) = self.0 {
+        if let Some(hazptr) = self.hazptr {
             hazptr
         } else {
-            let hazptr = SHARED_DOMAIN.acquire();
-            self.0 = Some(hazptr);
+            let hazptr = self.domain.acquire();
+            self.hazptr = Some(hazptr);
             hazptr
         }
     }
@@ -60,18 +69,23 @@ impl HazPtrHolder {
     }
 
     pub fn reset(&mut self) {
-        if let Some(hazptr) = self.0 {
+        if let Some(hazptr) = self.hazptr {
             hazptr.ptr.store(std::ptr::null_mut(), Ordering::SeqCst);
         }
     }
+
+    /// Get a reference to the HazPtrHolder's domain.
+    pub fn domain(&self) -> Pin<&HazPtrDomain> {
+        self.domain
+    }
 }
 
-impl Drop for HazPtrHolder {
+impl Drop for HazPtrHolder<'_> {
     fn drop(&mut self) {
         self.reset();
 
         // Return self.0 to domain if Some
-        if let Some(hazptr) = self.0 {
+        if let Some(hazptr) = self.hazptr {
             hazptr.active.store(false, Ordering::SeqCst);
         }
     }
@@ -90,26 +104,30 @@ impl HazPtr {
 }
 
 pub trait Deleter {
-    fn delete(&self, ptr: *mut dyn Drop);
+    /// # Safety
+    /// `ptr` must have been allocated by the corresponding allocation method.
+    /// delete must be called at most once for each `ptr`.
+    unsafe fn delete(&self, ptr: *mut dyn Drop);
 }
 
-impl Deleter for fn(*mut (dyn Drop + 'static)) {
-    fn delete(&self, ptr: *mut dyn Drop) {
-        (*self)(ptr)
+impl Deleter for unsafe fn(*mut (dyn Drop + 'static)) {
+    unsafe fn delete(&self, ptr: *mut dyn Drop) {
+        unsafe { (*self)(ptr) }
     }
 }
 
 pub mod deleters {
-    fn drop_in_place2(ptr: *mut dyn Drop) {
+    unsafe fn _drop_in_place(ptr: *mut dyn Drop) {
         // Safe by the contract on HazPtrObject::retire.
         unsafe { std::ptr::drop_in_place(ptr) };
     }
+
     /// Always safe to use given requirements on HazPtrObject::retire,
     /// but may lead to memory leaks if the pointer type itself needs drop.
     #[allow(non_upper_case_globals)]
-    pub static drop_in_place: fn(*mut dyn Drop) = drop_in_place2;
+    pub static drop_in_place: unsafe fn(*mut dyn Drop) = _drop_in_place;
 
-    fn drop_box2(ptr: *mut dyn Drop) {
+    unsafe fn _drop_box(ptr: *mut dyn Drop) {
         // Safety: Safe by the safety gurantees of retire and because it's only used when
         // retiring Box objects.
         let _ = unsafe { Box::from_raw(ptr) };
@@ -119,15 +137,15 @@ pub mod deleters {
     ///
     /// Can only be used on values that were originally derived from a Box.
     #[allow(non_upper_case_globals)]
-    pub static drop_box: fn(*mut dyn Drop) = drop_box2;
+    pub static drop_box: unsafe fn(*mut dyn Drop) = _drop_box;
 }
 
 #[allow(drop_bounds)]
-pub trait HazPtrObject
+pub trait HazPtrObject<'domain>
 where
-    Self: Sized + Drop + 'static,
+    Self: Sized + Drop + 'domain,
 {
-    fn domain(&self) -> &HazPtrDomain;
+    fn domain(&self) -> Pin<&'domain HazPtrDomain>;
 
     /// # Safety
     ///
@@ -140,51 +158,84 @@ where
         if !std::mem::needs_drop::<Self>() {
             return;
         }
-        unsafe { &*self }
-            .domain()
-            .retire(self as *mut dyn Drop, deleter);
+
+        let ptr: *mut dyn Drop = self;
+
+        // Safety: we can extend the lifetime to `'static` here since
+        //         the only thing `HazPtrObject` has a reference to is the domain.
+        //         since we're moving ownership of this `HazPtrObject` into it's
+        //         own domain and it can never escape it effectively has a
+        //         'static lifetime.
+        let ptr: *mut (dyn Drop + 'static) = unsafe { std::mem::transmute(ptr) };
+
+        unsafe { &*self }.domain().retire(ptr, deleter);
     }
 }
 
-pub struct HazPtrObjectWrapper<T> {
+pub struct HazPtrObjectWrapper<'domain, T> {
     inner: T,
-    // domain: HazPtrDomain,
+    domain: Pin<&'domain HazPtrDomain>,
 }
 
-impl<T> HazPtrObjectWrapper<T> {
-    pub fn with_default_domain(t: T) -> Self {
-        Self { inner: t }
+impl<'domain, T> HazPtrObjectWrapper<'domain, T> {
+    pub fn with_domain(t: T, domain: Pin<&'domain HazPtrDomain>) -> Self {
+        Self { inner: t, domain }
     }
 }
 
-impl<T: 'static> HazPtrObject for HazPtrObjectWrapper<T> {
-    fn domain(&self) -> &HazPtrDomain {
-        &SHARED_DOMAIN
+impl<T> HazPtrObjectWrapper<'static, T> {
+    pub fn with_default_domain(t: T) -> Self {
+        // Safety: `SHARED_DOMAIN` is a static
+        let domain = unsafe { Pin::new_unchecked(&SHARED_DOMAIN) };
+        Self::with_domain(t, domain)
+    }
+}
+
+impl<'domain, T: 'static> HazPtrObject<'domain> for HazPtrObjectWrapper<'domain, T> {
+    /// Get a reference to the HazPtrObjectWrapper's domain.
+    fn domain(&self) -> Pin<&'domain HazPtrDomain> {
+        self.domain
     }
 }
 
 // TODO: get rid of this requirement
-impl<T> Drop for HazPtrObjectWrapper<T> {
+impl<T> Drop for HazPtrObjectWrapper<'_, T> {
     fn drop(&mut self) {}
 }
 
-impl<T> Deref for HazPtrObjectWrapper<T> {
+impl<T> Deref for HazPtrObjectWrapper<'_, T> {
     type Target = T;
     fn deref(&self) -> &Self::Target {
         &self.inner
     }
 }
 
-impl<T> DerefMut for HazPtrObjectWrapper<T> {
+impl<T> DerefMut for HazPtrObjectWrapper<'_, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.inner
     }
 }
 
 // Holds linked list of HazPtrs
+#[derive(Default)]
 pub struct HazPtrDomain {
     hazptrs: HazPtrs,
     retired: RetiredList,
+}
+
+impl !Unpin for HazPtrDomain {}
+
+impl HazPtrDomain {
+    fn holder(self: Pin<&Self>) -> HazPtrHolder {
+        HazPtrHolder {
+            domain: self,
+            hazptr: None,
+        }
+    }
+
+    fn object<T>(self: Pin<&Self>, t: T) -> HazPtrObjectWrapper<'_, T> {
+        HazPtrObjectWrapper::with_domain(t, self)
+    }
 }
 
 impl HazPtrDomain {
@@ -290,6 +341,7 @@ impl HazPtrDomain {
         }
 
         // Find all guarded addresses.
+        #[allow(clippy::mutable_key_type)]
         let mut guarded_ptrs = HashSet::new();
         let mut node = self.hazptrs.head.load(Ordering::SeqCst);
         while !node.is_null() {
@@ -317,7 +369,11 @@ impl HazPtrDomain {
                 }
             } else {
                 // No longer guarded -- reclaim using deleter.
-                n.deleter.delete(n.ptr);
+                // Safety:
+                // - `n.ptr` has not yet been dropped and will not be dropped again (we have removed it from `remaining`)
+                // - `n.ptr` has been allocated the corresponding allocation method corresponding to `n.deleter`
+                //   as per the safety guarantees of calling `retire`.
+                unsafe { n.deleter.delete(n.ptr) };
                 reclaimed += 1;
             }
         }
@@ -364,10 +420,26 @@ impl HazPtrDomain {
 
 impl Drop for HazPtrDomain {
     fn drop(&mut self) {
-        todo!()
+        // TODO: is this correct?
+        self.eager_reclaim(true);
+
+        // Safety:
+        // - we have exclusive access to `self.hazptrs` and no one will ever have access to it again.
+        // - the nodes were allocated using `Box::into_raw(Box::new(...))`
+        let mut head = *self.hazptrs.head.get_mut();
+        while let Some(node) = NonNull::new(head) {
+            let mut node = unsafe { Box::from_raw(node.as_ptr()) };
+            assert!(!*node.active.get_mut());
+
+            head = *node.next.get_mut();
+        }
+
+        assert!(self.retired.head.get_mut().is_null());
+        assert_eq!(*self.retired.count.get_mut(), 0);
     }
 }
 
+#[derive(Default)]
 struct HazPtrs {
     head: AtomicPtr<HazPtr>,
 }
@@ -378,6 +450,7 @@ struct Retired {
     next: AtomicPtr<Retired>,
 }
 
+#[derive(Default)]
 struct RetiredList {
     head: AtomicPtr<Retired>,
     count: AtomicUsize,
@@ -396,15 +469,26 @@ mod tests {
     }
 
     #[test]
-    fn feels_good() {
+    fn feels_good_static() {
+        feels_good(shared_domain());
+    }
+
+    #[test]
+    fn feels_good_local() {
+        let domain = Box::pin(HazPtrDomain::default());
+
+        feels_good(domain.as_ref());
+    }
+
+    fn feels_good(domain: Pin<&HazPtrDomain>) {
         let drops_42 = Arc::new(AtomicUsize::new(0));
 
         let x = AtomicPtr::new(Box::into_raw(Box::new(
-            HazPtrObjectWrapper::with_default_domain((42, CountDrops(Arc::clone(&drops_42)))),
+            domain.object((42, CountDrops(Arc::clone(&drops_42)))),
         )));
 
         // As a reader:
-        let mut h = HazPtrHolder::default();
+        let mut h = domain.holder();
 
         // Safety:
         //
@@ -424,24 +508,23 @@ mod tests {
         // invalid:
         // let _: i32 = my_x.0;
 
-        let mut h = HazPtrHolder::default();
+        let mut h = domain.holder();
         let my_x = unsafe { h.load(&x) }.expect("not null");
 
-        let mut h_tmp = HazPtrHolder::default();
+        let mut h_tmp = domain.holder();
         let _ = unsafe { h_tmp.load(&x) }.expect("not null");
         drop(h_tmp);
 
         // As a writer:
         let drops_9001 = Arc::new(AtomicUsize::new(0));
         let old = x.swap(
-            Box::into_raw(Box::new(HazPtrObjectWrapper::with_default_domain((
-                9001,
-                CountDrops(Arc::clone(&drops_9001)),
-            )))),
+            Box::into_raw(Box::new(
+                domain.object((9001, CountDrops(Arc::clone(&drops_9001)))),
+            )),
             std::sync::atomic::Ordering::SeqCst,
         );
 
-        let mut h2 = HazPtrHolder::default();
+        let mut h2 = domain.holder();
         let my_x2 = unsafe { h2.load(&x) }.expect("not null");
 
         assert_eq!(my_x.0, 42);
@@ -457,7 +540,7 @@ mod tests {
         assert_eq!(drops_42.load(Ordering::SeqCst), 0);
         assert_eq!(my_x.0, 42);
 
-        let n = SHARED_DOMAIN.eager_reclaim(false);
+        let n = domain.eager_reclaim(false);
         assert_eq!(n, 0);
 
         assert_eq!(drops_42.load(Ordering::SeqCst), 0);
@@ -467,14 +550,14 @@ mod tests {
         assert_eq!(drops_42.load(Ordering::SeqCst), 0);
         // _not_ drop(h2);
 
-        let n = SHARED_DOMAIN.eager_reclaim(false);
+        let n = domain.eager_reclaim(false);
         assert_eq!(n, 1);
 
         assert_eq!(drops_42.load(Ordering::SeqCst), 1);
         assert_eq!(drops_9001.load(Ordering::SeqCst), 0);
 
         drop(h2);
-        let n = SHARED_DOMAIN.eager_reclaim(false);
+        let n = domain.eager_reclaim(false);
         assert_eq!(n, 0);
         assert_eq!(drops_9001.load(Ordering::SeqCst), 0);
     }

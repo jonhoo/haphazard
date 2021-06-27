@@ -151,12 +151,13 @@ where
         }
 
         let ptr: *mut dyn Drop = self;
-
+        // TODO: is it possible to have an implementation of HazPtrObject where 'domain can be shorter than the actual lifetime of the domain?
+        //       if so, can we encode this requirement in the type system or do we need an additional safety comment?
         // Safety: we can extend the lifetime to `'static` here since
-        //         the only thing `HazPtrObject` has a reference to is the domain.
-        //         since we're moving ownership of this `HazPtrObject` into it's
-        //         own domain and it can never escape it effectively has a
-        //         'static lifetime.
+        //         `HazPtrObject` can only have references of 'domain or 'static lifetime.
+        //         Since we're moving ownership of this `HazPtrObject` into it's
+        //         own domain and it can never escape it can never be used after 'domain
+        //         is over and thus is effectively 'static.
         let ptr: *mut (dyn Drop + 'static) = unsafe { std::mem::transmute(ptr) };
 
         unsafe { &*self }.domain().retire(ptr, deleter);

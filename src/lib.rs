@@ -420,7 +420,6 @@ impl HazPtrDomain {
 
 impl Drop for HazPtrDomain {
     fn drop(&mut self) {
-        // TODO: is this correct?
         self.eager_reclaim(true);
 
         // Safety:
@@ -461,7 +460,22 @@ mod tests {
     use super::*;
 
     use std::sync::Arc;
+
+    #[derive(Default)]
     struct CountDrops(Arc<AtomicUsize>);
+
+    impl CountDrops {
+        fn current(&self) -> usize {
+            self.0.load(Ordering::SeqCst)
+        }
+    }
+
+    impl Clone for CountDrops {
+        fn clone(&self) -> Self {
+            Self(Arc::clone(&self.0))
+        }
+    }
+
     impl Drop for CountDrops {
         fn drop(&mut self) {
             self.0.fetch_add(1, Ordering::SeqCst);
@@ -481,10 +495,10 @@ mod tests {
     }
 
     fn feels_good(domain: Pin<&HazPtrDomain>) {
-        let drops_42 = Arc::new(AtomicUsize::new(0));
+        let drops_42 = CountDrops::default();
 
         let x = AtomicPtr::new(Box::into_raw(Box::new(
-            domain.object((42, CountDrops(Arc::clone(&drops_42)))),
+            domain.object((42, drops_42.clone())),
         )));
 
         // As a reader:
@@ -516,11 +530,9 @@ mod tests {
         drop(h_tmp);
 
         // As a writer:
-        let drops_9001 = Arc::new(AtomicUsize::new(0));
+        let drops_9001 = CountDrops::default();
         let old = x.swap(
-            Box::into_raw(Box::new(
-                domain.object((9001, CountDrops(Arc::clone(&drops_9001)))),
-            )),
+            Box::into_raw(Box::new(domain.object((9001, drops_9001.clone())))),
             std::sync::atomic::Ordering::SeqCst,
         );
 
@@ -537,28 +549,39 @@ mod tests {
         //  3. The deleter is valid for Box types.
         unsafe { old.retire(&deleters::drop_box) };
 
-        assert_eq!(drops_42.load(Ordering::SeqCst), 0);
+        assert_eq!(drops_42.current(), 0);
         assert_eq!(my_x.0, 42);
 
         let n = domain.eager_reclaim(false);
         assert_eq!(n, 0);
 
-        assert_eq!(drops_42.load(Ordering::SeqCst), 0);
+        assert_eq!(drops_42.current(), 0);
         assert_eq!(my_x.0, 42);
 
         drop(h);
-        assert_eq!(drops_42.load(Ordering::SeqCst), 0);
+        assert_eq!(drops_42.current(), 0);
         // _not_ drop(h2);
 
         let n = domain.eager_reclaim(false);
         assert_eq!(n, 1);
 
-        assert_eq!(drops_42.load(Ordering::SeqCst), 1);
-        assert_eq!(drops_9001.load(Ordering::SeqCst), 0);
+        assert_eq!(drops_42.current(), 1);
+        assert_eq!(drops_9001.current(), 0);
 
         drop(h2);
         let n = domain.eager_reclaim(false);
         assert_eq!(n, 0);
-        assert_eq!(drops_9001.load(Ordering::SeqCst), 0);
+        assert_eq!(drops_9001.current(), 0);
+
+        // Safety:
+        //
+        //  1. The pointer came from Box, so is valid.
+        //  2. The value is no longer accessible.
+        //  3. The deleter is valid for Box types.
+        unsafe { x.load(Ordering::SeqCst).retire(&deleters::drop_box) };
+        assert_eq!(drops_9001.current(), 1);
+
+        let n = domain.eager_reclaim(false);
+        assert_eq!(n, 0);
     }
 }

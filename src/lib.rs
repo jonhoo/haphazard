@@ -5,7 +5,6 @@
 
 use std::collections::HashSet;
 use std::ops::{Deref, DerefMut};
-use std::pin::Pin;
 use std::ptr::NonNull;
 use std::sync::atomic::Ordering;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize};
@@ -20,13 +19,8 @@ static SHARED_DOMAIN: HazPtrDomain = HazPtrDomain {
     },
 };
 
-fn shared_domain() -> Pin<&'static HazPtrDomain> {
-    // Safety: `SHARED_DOMAIN` is a static
-    unsafe { Pin::new_unchecked(&SHARED_DOMAIN) }
-}
-
 pub struct HazPtrHolder<'domain> {
-    domain: Pin<&'domain HazPtrDomain>,
+    domain: &'domain HazPtrDomain,
     hazptr: Option<&'static HazPtr>,
 }
 
@@ -76,7 +70,7 @@ impl HazPtrHolder<'_> {
     }
 
     /// Get a reference to the HazPtrHolder's domain.
-    pub fn domain(&self) -> Pin<&HazPtrDomain> {
+    pub fn domain(&self) -> &HazPtrDomain {
         self.domain
     }
 }
@@ -142,7 +136,7 @@ pub trait HazPtrObject<'domain>
 where
     Self: Sized + Drop + 'domain,
 {
-    fn domain(&self) -> Pin<&'domain HazPtrDomain>;
+    fn domain(&self) -> &'domain HazPtrDomain;
 
     /// # Safety
     ///
@@ -171,12 +165,12 @@ where
 
 pub struct HazPtrObjectWrapper<'domain, T> {
     inner: T,
-    domain: Pin<&'domain HazPtrDomain>,
+    domain: &'domain HazPtrDomain,
 }
 
 impl<'domain, T: 'static> HazPtrObject<'domain> for HazPtrObjectWrapper<'domain, T> {
     /// Get a reference to the HazPtrObjectWrapper's domain.
-    fn domain(&self) -> Pin<&'domain HazPtrDomain> {
+    fn domain(&self) -> &'domain HazPtrDomain {
         self.domain
     }
 }
@@ -206,17 +200,15 @@ pub struct HazPtrDomain {
     retired: RetiredList,
 }
 
-impl !Unpin for HazPtrDomain {}
-
 impl HazPtrDomain {
-    fn holder(self: Pin<&Self>) -> HazPtrHolder {
+    fn holder(&self) -> HazPtrHolder {
         HazPtrHolder {
             domain: self,
             hazptr: None,
         }
     }
 
-    fn object<T>(self: Pin<&Self>, t: T) -> HazPtrObjectWrapper<'_, T> {
+    fn object<T>(&self, t: T) -> HazPtrObjectWrapper<'_, T> {
         HazPtrObjectWrapper {
             inner: t,
             domain: self,
@@ -467,17 +459,17 @@ mod tests {
 
     #[test]
     fn feels_good_static() {
-        feels_good(shared_domain());
+        feels_good(&SHARED_DOMAIN);
     }
 
     #[test]
     fn feels_good_local() {
-        let domain = Box::pin(HazPtrDomain::default());
+        let domain = HazPtrDomain::default();
 
-        feels_good(domain.as_ref());
+        feels_good(&domain);
     }
 
-    fn feels_good(domain: Pin<&HazPtrDomain>) {
+    fn feels_good(domain: &HazPtrDomain) {
         let drops_42 = CountDrops::default();
 
         let x = AtomicPtr::new(Box::into_raw(Box::new(
@@ -497,6 +489,9 @@ mod tests {
         h.reset();
         // invalid:
         // let _: i32 = my_x.0;
+
+        // invalid:
+        // *domain = HazPtrDomain::default();
 
         let my_x = unsafe { h.load(&x) }.expect("not null");
         // valid:

@@ -295,7 +295,9 @@ impl HazPtrDomain {
         while !node.is_null() {
             // Safety: HazPtrs are never de-allocated.
             let n = unsafe { &*node };
-            guarded_ptrs.insert(n.ptr.load(Ordering::SeqCst));
+            if n.active.load(Ordering::SeqCst) {
+                guarded_ptrs.insert(n.ptr.load(Ordering::SeqCst));
+            }
             node = n.next.load(Ordering::SeqCst);
         }
 

@@ -145,9 +145,6 @@ where
     /// It is okay for existing readers to still refer to Self.
     ///   
     unsafe fn retire(self: *mut Self, deleter: &'static dyn Deleter) {
-        if !std::mem::needs_drop::<Self>() {
-            return;
-        }
         unsafe { &*self }
             .domain()
             .retire(self as *mut dyn Reclaim, deleter);

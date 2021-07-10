@@ -1,22 +1,41 @@
 use crate::{Deleter, HazPtr, Reclaim};
 use std::collections::HashSet;
+use std::marker::PhantomData;
 use std::sync::atomic::Ordering;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize};
 
-static SHARED_DOMAIN: HazPtrDomain = HazPtrDomain::new();
-
-// Holds linked list of HazPtrs
-pub struct HazPtrDomain {
-    hazptrs: HazPtrs,
-    retired: RetiredList,
+#[non_exhaustive]
+pub struct Global;
+impl Global {
+    const fn new() -> Self {
+        Global
+    }
 }
 
-impl HazPtrDomain {
+static SHARED_DOMAIN: HazPtrDomain<Global> = HazPtrDomain::new(&Global::new());
+
+// Holds linked list of HazPtrs
+pub struct HazPtrDomain<F> {
+    hazptrs: HazPtrs,
+    retired: RetiredList,
+    family: PhantomData<F>,
+}
+
+impl HazPtrDomain<Global> {
     pub fn global() -> &'static Self {
         &SHARED_DOMAIN
     }
+}
 
-    pub const fn new() -> Self {
+#[macro_export]
+macro_rules! unique_domain {
+    () => {
+        HazPtrDomain::new(&|| {})
+    };
+}
+
+impl<F> HazPtrDomain<F> {
+    pub const fn new(_: &F) -> Self {
         Self {
             hazptrs: HazPtrs {
                 head: AtomicPtr::new(std::ptr::null_mut()),
@@ -25,6 +44,7 @@ impl HazPtrDomain {
                 head: AtomicPtr::new(std::ptr::null_mut()),
                 count: AtomicUsize::new(0),
             },
+            family: PhantomData,
         }
     }
 
@@ -224,7 +244,7 @@ impl HazPtrDomain {
     }
 }
 
-impl Drop for HazPtrDomain {
+impl<F> Drop for HazPtrDomain<F> {
     fn drop(&mut self) {
         // There should be no hazard pointers active, so all retired objects can be reclaimed.
         let nretired = *self.retired.count.get_mut();
@@ -260,8 +280,8 @@ impl Retired {
     /// # Safety
     ///
     /// `ptr` will not be accessed after `'domain` ends.
-    unsafe fn new<'domain>(
-        _: &'domain HazPtrDomain,
+    unsafe fn new<'domain, F>(
+        _: &'domain HazPtrDomain<F>,
         ptr: *mut (dyn Reclaim + 'domain),
         deleter: &'static dyn Deleter,
     ) -> Self {
@@ -292,3 +312,54 @@ fn foo() {
     drop(domain);
 }
 */
+
+/// ```compile_fail
+/// use std::sync::atomic::AtomicPtr;
+/// use haphazard::*;
+/// let dw = HazPtrDomain::global();
+/// let dr = HazPtrDomain::new(&());
+///
+/// let x = AtomicPtr::new(Box::into_raw(Box::new(HazPtrObjectWrapper::with_domain(&dw, 42))));
+///
+/// // Reader uses a different domain thant the writer!
+/// let mut h = HazPtrHolder::for_domain(&dr);
+///
+/// // This shouldn't compile because families differ.
+/// let _ = unsafe { h.load(&x) }.expect("not null");
+/// ```
+#[cfg(doctest)]
+struct CannotConfuseGlobalWriter;
+
+/// ```compile_fail
+/// use std::sync::atomic::AtomicPtr;
+/// use haphazard::*;
+/// let dw = HazPtrDomain::new(&());
+/// let dr = HazPtrDomain::global();
+///
+/// let x = AtomicPtr::new(Box::into_raw(Box::new(HazPtrObjectWrapper::with_domain(&dw, 42))));
+///
+/// // Reader uses a different domain thant the writer!
+/// let mut h = HazPtrHolder::for_domain(&dr);
+///
+/// // This shouldn't compile because families differ.
+/// let _ = unsafe { h.load(&x) }.expect("not null");
+/// ```
+#[cfg(doctest)]
+struct CannotConfuseGlobalReader;
+
+/// ```compile_fail
+/// use std::sync::atomic::AtomicPtr;
+/// use haphazard::*;
+/// let dw = unique_domain!();
+/// let dr = unique_domain!();
+///
+/// let x = AtomicPtr::new(Box::into_raw(Box::new(HazPtrObjectWrapper::with_domain(&dw, 42))));
+///
+/// // Reader uses a different domain thant the writer!
+/// let mut h = HazPtrHolder::for_domain(&dr);
+///
+/// // This shouldn't compile because families differ.
+/// let _ = unsafe { h.load(&x) }.expect("not null");
+/// ```
+#[cfg(doctest)]
+struct CannotConfuseAcrossFamilies;

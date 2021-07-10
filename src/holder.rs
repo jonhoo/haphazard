@@ -2,19 +2,19 @@ use crate::{HazPtr, HazPtrDomain, HazPtrObject};
 use std::sync::atomic::AtomicPtr;
 use std::sync::atomic::Ordering;
 
-pub struct HazPtrHolder<'domain> {
+pub struct HazPtrHolder<'domain, F> {
     hazard: Option<&'domain HazPtr>,
-    domain: &'domain HazPtrDomain,
+    domain: &'domain HazPtrDomain<F>,
 }
 
-impl HazPtrHolder<'static> {
+impl HazPtrHolder<'static, crate::Global> {
     pub fn global() -> Self {
         HazPtrHolder::for_domain(HazPtrDomain::global())
     }
 }
 
-impl<'domain> HazPtrHolder<'domain> {
-    pub fn for_domain(domain: &'domain HazPtrDomain) -> Self {
+impl<'domain, F> HazPtrHolder<'domain, F> {
+    pub fn for_domain(domain: &'domain HazPtrDomain<F>) -> Self {
         Self {
             hazard: None,
             domain,
@@ -38,10 +38,12 @@ impl<'domain> HazPtrHolder<'domain> {
     /// Caller must also guarantee that the value behind the `AtomicPtr` will only be deallocated
     /// through calls to [`HazPtrObject::retire`] on the same [`HazPtrDomain`] as this holder is
     /// associated with.
+    // TODO: Ordering
     pub unsafe fn load<'l, 'o, T>(&'l mut self, ptr: &'_ AtomicPtr<T>) -> Option<&'l T>
     where
-        T: HazPtrObject<'o>,
+        T: HazPtrObject<'o, F>,
         'o: 'l,
+        F: 'static,
     {
         let hazptr = self.hazptr();
         let mut ptr1 = ptr.load(Ordering::SeqCst);
@@ -58,8 +60,8 @@ impl<'domain> HazPtrHolder<'domain> {
                     //  2. Pointer address is valid by the safety contract of load.
                     let r = unsafe { nn.as_ref() };
                     debug_assert_eq!(
-                        self.domain as *const HazPtrDomain,
-                        r.domain() as *const HazPtrDomain,
+                        self.domain as *const HazPtrDomain<F>,
+                        r.domain() as *const HazPtrDomain<F>,
                         "object guarded by different domain than holder used to access it"
                     );
                     r
@@ -77,7 +79,7 @@ impl<'domain> HazPtrHolder<'domain> {
     }
 }
 
-impl Drop for HazPtrHolder<'_> {
+impl<F> Drop for HazPtrHolder<'_, F> {
     fn drop(&mut self) {
         self.reset();
 

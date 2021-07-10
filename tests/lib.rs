@@ -98,8 +98,8 @@ fn feels_good() {
 #[test]
 #[should_panic]
 fn feels_bad() {
-    let dw = HazPtrDomain::new();
-    let dr = HazPtrDomain::new();
+    let dw = HazPtrDomain::new(&());
+    let dr = HazPtrDomain::new(&());
 
     let drops_42 = Arc::new(AtomicUsize::new(0));
 

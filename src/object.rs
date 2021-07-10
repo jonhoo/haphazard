@@ -1,11 +1,11 @@
 use crate::{Deleter, HazPtrDomain, Reclaim};
 use std::ops::{Deref, DerefMut};
 
-pub trait HazPtrObject<'domain>
+pub trait HazPtrObject<'domain, F: 'static>
 where
     Self: Sized + 'domain,
 {
-    fn domain(&self) -> &'domain HazPtrDomain;
+    fn domain(&self) -> &'domain HazPtrDomain<F>;
 
     /// # Safety
     ///
@@ -24,37 +24,39 @@ where
     }
 }
 
-pub struct HazPtrObjectWrapper<'domain, T> {
+pub struct HazPtrObjectWrapper<'domain, T, F> {
     inner: T,
-    domain: &'domain HazPtrDomain,
+    domain: &'domain HazPtrDomain<F>,
 }
 
-impl<T> HazPtrObjectWrapper<'static, T> {
+impl<T> HazPtrObjectWrapper<'static, T, crate::Global> {
     pub fn with_global_domain(t: T) -> Self {
         HazPtrObjectWrapper::with_domain(HazPtrDomain::global(), t)
     }
 }
 
-impl<'domain, T> HazPtrObjectWrapper<'domain, T> {
-    pub fn with_domain(domain: &'domain HazPtrDomain, t: T) -> Self {
+impl<'domain, T, F> HazPtrObjectWrapper<'domain, T, F> {
+    pub fn with_domain(domain: &'domain HazPtrDomain<F>, t: T) -> Self {
         Self { inner: t, domain }
     }
 }
 
-impl<'domain, T: 'domain> HazPtrObject<'domain> for HazPtrObjectWrapper<'domain, T> {
-    fn domain(&self) -> &'domain HazPtrDomain {
+impl<'domain, T: 'domain, F: 'static> HazPtrObject<'domain, F>
+    for HazPtrObjectWrapper<'domain, T, F>
+{
+    fn domain(&self) -> &'domain HazPtrDomain<F> {
         self.domain
     }
 }
 
-impl<T> Deref for HazPtrObjectWrapper<'_, T> {
+impl<T, F> Deref for HazPtrObjectWrapper<'_, T, F> {
     type Target = T;
     fn deref(&self) -> &Self::Target {
         &self.inner
     }
 }
 
-impl<T> DerefMut for HazPtrObjectWrapper<'_, T> {
+impl<T, F> DerefMut for HazPtrObjectWrapper<'_, T, F> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.inner
     }

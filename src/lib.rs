@@ -8,6 +8,8 @@ mod holder;
 mod object;
 mod ptr;
 
+pub use domain::Global;
+
 pub use deleter::{deleters, Deleter, Reclaim};
 pub use domain::HazPtrDomain;
 pub use holder::HazPtrHolder;

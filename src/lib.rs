@@ -9,7 +9,7 @@ mod object;
 mod ptr;
 
 pub use deleter::{deleters, Deleter, Reclaim};
-pub use domain::{HazPtrDomain, SHARED_DOMAIN};
+pub use domain::HazPtrDomain;
 pub use holder::HazPtrHolder;
 pub use object::{HazPtrObject, HazPtrObjectWrapper};
 pub use ptr::HazPtr;

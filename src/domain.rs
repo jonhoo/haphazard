@@ -3,15 +3,7 @@ use std::collections::HashSet;
 use std::sync::atomic::Ordering;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize};
 
-pub static SHARED_DOMAIN: HazPtrDomain = HazPtrDomain {
-    hazptrs: HazPtrs {
-        head: AtomicPtr::new(std::ptr::null_mut()),
-    },
-    retired: RetiredList {
-        head: AtomicPtr::new(std::ptr::null_mut()),
-        count: AtomicUsize::new(0),
-    },
-};
+static SHARED_DOMAIN: HazPtrDomain = HazPtrDomain::new();
 
 // Holds linked list of HazPtrs
 pub struct HazPtrDomain {
@@ -20,7 +12,23 @@ pub struct HazPtrDomain {
 }
 
 impl HazPtrDomain {
-    pub(crate) fn acquire(&self) -> &'static HazPtr {
+    pub fn global() -> &'static Self {
+        &SHARED_DOMAIN
+    }
+
+    pub const fn new() -> Self {
+        Self {
+            hazptrs: HazPtrs {
+                head: AtomicPtr::new(std::ptr::null_mut()),
+            },
+            retired: RetiredList {
+                head: AtomicPtr::new(std::ptr::null_mut()),
+                count: AtomicUsize::new(0),
+            },
+        }
+    }
+
+    pub(crate) fn acquire(&self) -> &HazPtr {
         let head_ptr = &self.hazptrs.head;
         let mut node = head_ptr.load(Ordering::SeqCst);
         loop {
@@ -75,13 +83,18 @@ impl HazPtrDomain {
         }
     }
 
-    pub(crate) fn retire(&self, ptr: *mut dyn Reclaim, deleter: &'static dyn Deleter) {
+    /// # Safety
+    ///
+    /// ptr remains valid until `self` is dropped.
+    pub(crate) unsafe fn retire<'domain>(
+        &'domain self,
+        ptr: *mut (dyn Reclaim + 'domain),
+        deleter: &'static dyn Deleter,
+    ) {
         // First, stick ptr onto the list of retired objects.
-        let retired = Box::into_raw(Box::new(Retired {
-            ptr,
-            deleter,
-            next: AtomicPtr::new(std::ptr::null_mut()),
-        }));
+        //
+        // Safety: ptr will not be accessed after Domain is dropped, which is when 'domain ends.
+        let retired = Box::into_raw(Box::new(unsafe { Retired::new(self, ptr, deleter) }));
         // Increment the count _before_ we give anyone a chance to reclaim it.
         self.retired.count.fetch_add(1, Ordering::SeqCst);
         // Stick it at the head of the linked list
@@ -213,7 +226,22 @@ impl HazPtrDomain {
 
 impl Drop for HazPtrDomain {
     fn drop(&mut self) {
-        todo!()
+        // There should be no hazard pointers active, so all retired objects can be reclaimed.
+        let nretired = *self.retired.count.get_mut();
+        let nreclaimed = self.bulk_reclaim(0, false);
+        assert_eq!(nretired, nreclaimed);
+        assert!(self.retired.head.get_mut().is_null());
+
+        // Also drop all hazard pointers, as no-one should be holding them any more.
+        let mut node: *mut HazPtr = *self.hazptrs.head.get_mut();
+        while !node.is_null() {
+            // Safety: we're in Drop, so no-one holds any of our hazard pointers any more,
+            // as all holders are tied to 'domain (which must have expired on drop).
+            let mut n: Box<HazPtr> = unsafe { Box::from_raw(node) };
+            assert!(!*n.active.get_mut());
+            node = *n.next.get_mut();
+            drop(n);
+        }
     }
 }
 
@@ -222,12 +250,45 @@ struct HazPtrs {
 }
 
 struct Retired {
+    // This is + 'domain, which is enforced for anything that constructs a Retired
     ptr: *mut dyn Reclaim,
     deleter: &'static dyn Deleter,
     next: AtomicPtr<Retired>,
+}
+
+impl Retired {
+    /// # Safety
+    ///
+    /// `ptr` will not be accessed after `'domain` ends.
+    unsafe fn new<'domain>(
+        _: &'domain HazPtrDomain,
+        ptr: *mut (dyn Reclaim + 'domain),
+        deleter: &'static dyn Deleter,
+    ) -> Self {
+        Retired {
+            ptr: unsafe { std::mem::transmute::<_, *mut (dyn Reclaim + 'static)>(ptr) },
+            deleter,
+            next: AtomicPtr::new(std::ptr::null_mut()),
+        }
+    }
 }
 
 struct RetiredList {
     head: AtomicPtr<Retired>,
     count: AtomicUsize,
 }
+
+/*
+fn foo() {
+    let domain = HazPtrDomain::new();
+    'a: {
+        let d: &'a HazPtrDomain = &domain;
+        let t = String::new();
+        let z: Box<PrintOnDrop<&'a String>> = Box::new(PrintOnDrop(&t));
+        d.retire(z); // z goes on .retired, but is _not_ dropped
+        // drop(t), so z is no longer valid
+    }
+    // walk .retired, find that z can be reclaimed, call drop(z);
+    drop(domain);
+}
+*/

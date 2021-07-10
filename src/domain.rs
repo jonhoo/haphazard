@@ -151,7 +151,7 @@ impl<F> HazPtrDomain<F> {
 
         self.retired.count.fetch_add(1, Ordering::Release);
 
-        // TODO: Folly has if check here, but only for recursion from bulk_lookup_and_reclaim,
+        // Folly has if check here, but only for recursion from bulk_lookup_and_reclaim,
         // which we don't do, so check isn't necessary.
         self.check_cleanup_and_reclaim();
     }
@@ -359,6 +359,10 @@ impl<F> HazPtrDomain<F> {
 
     pub fn eager_reclaim(&self) -> usize {
         self.bulk_reclaim(true)
+    }
+
+    pub(crate) fn release(&self, hazard: &HazPtr) {
+        hazard.release();
     }
 }
 

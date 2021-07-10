@@ -26,14 +26,14 @@ fn feels_good() {
     //
     //  1. AtomicPtr points to a Box, so is always valid.
     //  2. Writers to AtomicPtr use HazPtrObject::retire.
-    let my_x = unsafe { h.load(&x) }.expect("not null");
+    let my_x = unsafe { h.protect(&x) }.expect("not null");
     // valid:
     assert_eq!(my_x.0, 42);
     h.reset();
     // invalid:
     // let _: i32 = my_x.0;
 
-    let my_x = unsafe { h.load(&x) }.expect("not null");
+    let my_x = unsafe { h.protect(&x) }.expect("not null");
     // valid:
     assert_eq!(my_x.0, 42);
     drop(h);
@@ -41,10 +41,10 @@ fn feels_good() {
     // let _: i32 = my_x.0;
 
     let mut h = HazPtrHolder::global();
-    let my_x = unsafe { h.load(&x) }.expect("not null");
+    let my_x = unsafe { h.protect(&x) }.expect("not null");
 
     let mut h_tmp = HazPtrHolder::global();
-    let _ = unsafe { h_tmp.load(&x) }.expect("not null");
+    let _ = unsafe { h_tmp.protect(&x) }.expect("not null");
     drop(h_tmp);
 
     // As a writer:
@@ -58,7 +58,7 @@ fn feels_good() {
     );
 
     let mut h2 = HazPtrHolder::global();
-    let my_x2 = unsafe { h2.load(&x) }.expect("not null");
+    let my_x2 = unsafe { h2.protect(&x) }.expect("not null");
 
     assert_eq!(my_x.0, 42);
     assert_eq!(my_x2.0, 9001);
@@ -112,5 +112,5 @@ fn feels_bad() {
     let mut h = HazPtrHolder::for_domain(&dr);
 
     // Let's hope this catches the error (at least in debug mode).
-    let _ = unsafe { h.load(&x) }.expect("not null");
+    let _ = unsafe { h.protect(&x) }.expect("not null");
 }

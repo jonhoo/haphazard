@@ -133,7 +133,7 @@ impl<T> Reclaim for T {}
 
 pub trait HazPtrObject
 where
-    Self: Sized + Reclaim + 'static,
+    Self: Sized + 'static,
 {
     fn domain(&self) -> &HazPtrDomain;
 

@@ -38,7 +38,6 @@ impl<'domain, F> HazPtrHolder<'domain, F> {
     /// Caller must also guarantee that the value behind the `AtomicPtr` will only be deallocated
     /// through calls to [`HazPtrObject::retire`] on the same [`HazPtrDomain`] as this holder is
     /// associated with.
-    // TODO: Ordering
     pub unsafe fn load<'l, 'o, T>(&'l mut self, ptr: &'_ AtomicPtr<T>) -> Option<&'l T>
     where
         T: HazPtrObject<'o, F>,

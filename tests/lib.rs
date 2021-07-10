@@ -73,7 +73,7 @@ fn feels_good() {
     assert_eq!(drops_42.load(Ordering::SeqCst), 0);
     assert_eq!(my_x.0, 42);
 
-    let n = HazPtrDomain::global().eager_reclaim(false);
+    let n = HazPtrDomain::global().eager_reclaim();
     assert_eq!(n, 0);
 
     assert_eq!(drops_42.load(Ordering::SeqCst), 0);
@@ -83,14 +83,14 @@ fn feels_good() {
     assert_eq!(drops_42.load(Ordering::SeqCst), 0);
     // _not_ drop(h2);
 
-    let n = HazPtrDomain::global().eager_reclaim(false);
+    let n = HazPtrDomain::global().eager_reclaim();
     assert_eq!(n, 1);
 
     assert_eq!(drops_42.load(Ordering::SeqCst), 1);
     assert_eq!(drops_9001.load(Ordering::SeqCst), 0);
 
     drop(h2);
-    let n = HazPtrDomain::global().eager_reclaim(false);
+    let n = HazPtrDomain::global().eager_reclaim();
     assert_eq!(n, 0);
     assert_eq!(drops_9001.load(Ordering::SeqCst), 0);
 }

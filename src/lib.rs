@@ -90,26 +90,30 @@ impl HazPtr {
 }
 
 pub trait Deleter {
-    fn delete(&self, ptr: *mut dyn Drop);
+    /// # Safety
+    /// `ptr` must have been allocated by the corresponding allocation method.
+    /// delete must be called at most once for each `ptr`.
+    unsafe fn delete(&self, ptr: *mut dyn Drop);
 }
 
-impl Deleter for fn(*mut (dyn Drop + 'static)) {
-    fn delete(&self, ptr: *mut dyn Drop) {
-        (*self)(ptr)
+impl Deleter for unsafe fn(*mut (dyn Drop + 'static)) {
+    unsafe fn delete(&self, ptr: *mut dyn Drop) {
+        unsafe { (*self)(ptr) }
     }
 }
 
 pub mod deleters {
-    fn drop_in_place2(ptr: *mut dyn Drop) {
+    unsafe fn _drop_in_place(ptr: *mut dyn Drop) {
         // Safe by the contract on HazPtrObject::retire.
         unsafe { std::ptr::drop_in_place(ptr) };
     }
+
     /// Always safe to use given requirements on HazPtrObject::retire,
     /// but may lead to memory leaks if the pointer type itself needs drop.
     #[allow(non_upper_case_globals)]
-    pub static drop_in_place: fn(*mut dyn Drop) = drop_in_place2;
+    pub static drop_in_place: unsafe fn(*mut dyn Drop) = _drop_in_place;
 
-    fn drop_box2(ptr: *mut dyn Drop) {
+    unsafe fn _drop_box(ptr: *mut dyn Drop) {
         // Safety: Safe by the safety gurantees of retire and because it's only used when
         // retiring Box objects.
         let _ = unsafe { Box::from_raw(ptr) };
@@ -119,7 +123,7 @@ pub mod deleters {
     ///
     /// Can only be used on values that were originally derived from a Box.
     #[allow(non_upper_case_globals)]
-    pub static drop_box: fn(*mut dyn Drop) = drop_box2;
+    pub static drop_box: unsafe fn(*mut dyn Drop) = _drop_box;
 }
 
 #[allow(drop_bounds)]
@@ -290,6 +294,7 @@ impl HazPtrDomain {
         }
 
         // Find all guarded addresses.
+        #[allow(clippy::mutable_key_type)]
         let mut guarded_ptrs = HashSet::new();
         let mut node = self.hazptrs.head.load(Ordering::SeqCst);
         while !node.is_null() {
@@ -318,7 +323,11 @@ impl HazPtrDomain {
                 }
             } else {
                 // No longer guarded -- reclaim using deleter.
-                n.deleter.delete(n.ptr);
+                // Safety:
+                // - `n.ptr` has not yet been dropped and will not be dropped again (we have removed it from `remaining`)
+                // - `n.ptr` has been allocated the corresponding allocation method corresponding to `n.deleter`
+                //   as per the safety guarantees of calling `retire`.
+                unsafe { n.deleter.delete(n.ptr) };
                 reclaimed += 1;
             }
         }

@@ -93,17 +93,19 @@ pub trait Deleter {
     /// # Safety
     /// `ptr` must have been allocated by the corresponding allocation method.
     /// delete must be called at most once for each `ptr`.
-    unsafe fn delete(&self, ptr: *mut dyn Drop);
+    unsafe fn delete(&self, ptr: *mut dyn Reclaim);
 }
 
-impl Deleter for unsafe fn(*mut (dyn Drop + 'static)) {
-    unsafe fn delete(&self, ptr: *mut dyn Drop) {
+impl Deleter for unsafe fn(*mut (dyn Reclaim + 'static)) {
+    unsafe fn delete(&self, ptr: *mut dyn Reclaim) {
         unsafe { (*self)(ptr) }
     }
 }
 
 pub mod deleters {
-    unsafe fn _drop_in_place(ptr: *mut dyn Drop) {
+    use super::Reclaim;
+
+    unsafe fn _drop_in_place(ptr: *mut dyn Reclaim) {
         // Safe by the contract on HazPtrObject::retire.
         unsafe { std::ptr::drop_in_place(ptr) };
     }
@@ -111,9 +113,9 @@ pub mod deleters {
     /// Always safe to use given requirements on HazPtrObject::retire,
     /// but may lead to memory leaks if the pointer type itself needs drop.
     #[allow(non_upper_case_globals)]
-    pub static drop_in_place: unsafe fn(*mut dyn Drop) = _drop_in_place;
+    pub static drop_in_place: unsafe fn(*mut dyn Reclaim) = _drop_in_place;
 
-    unsafe fn _drop_box(ptr: *mut dyn Drop) {
+    unsafe fn _drop_box(ptr: *mut dyn Reclaim) {
         // Safety: Safe by the safety gurantees of retire and because it's only used when
         // retiring Box objects.
         let _ = unsafe { Box::from_raw(ptr) };
@@ -123,13 +125,15 @@ pub mod deleters {
     ///
     /// Can only be used on values that were originally derived from a Box.
     #[allow(non_upper_case_globals)]
-    pub static drop_box: unsafe fn(*mut dyn Drop) = _drop_box;
+    pub static drop_box: unsafe fn(*mut dyn Reclaim) = _drop_box;
 }
 
-#[allow(drop_bounds)]
+pub trait Reclaim {}
+impl<T> Reclaim for T {}
+
 pub trait HazPtrObject
 where
-    Self: Sized + Drop + 'static,
+    Self: Sized + Reclaim + 'static,
 {
     fn domain(&self) -> &HazPtrDomain;
 
@@ -146,7 +150,7 @@ where
         }
         unsafe { &*self }
             .domain()
-            .retire(self as *mut dyn Drop, deleter);
+            .retire(self as *mut dyn Reclaim, deleter);
     }
 }
 
@@ -165,11 +169,6 @@ impl<T: 'static> HazPtrObject for HazPtrObjectWrapper<T> {
     fn domain(&self) -> &HazPtrDomain {
         &SHARED_DOMAIN
     }
-}
-
-// TODO: get rid of this requirement
-impl<T> Drop for HazPtrObjectWrapper<T> {
-    fn drop(&mut self) {}
 }
 
 impl<T> Deref for HazPtrObjectWrapper<T> {
@@ -247,7 +246,7 @@ impl HazPtrDomain {
         }
     }
 
-    fn retire(&self, ptr: *mut dyn Drop, deleter: &'static dyn Deleter) {
+    fn retire(&self, ptr: *mut dyn Reclaim, deleter: &'static dyn Deleter) {
         // First, stick ptr onto the list of retired objects.
         let retired = Box::into_raw(Box::new(Retired {
             ptr,
@@ -386,7 +385,7 @@ struct HazPtrs {
 }
 
 struct Retired {
-    ptr: *mut dyn Drop,
+    ptr: *mut dyn Reclaim,
     deleter: &'static dyn Deleter,
     next: AtomicPtr<Retired>,
 }

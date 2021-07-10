@@ -113,7 +113,7 @@ pub mod deleters {
     /// Always safe to use given requirements on HazPtrObject::retire,
     /// but may lead to memory leaks if the pointer type itself needs drop.
     #[allow(non_upper_case_globals)]
-    pub static drop_in_place: unsafe fn(*mut dyn Reclaim) = _drop_in_place;
+    pub const drop_in_place: unsafe fn(*mut dyn Reclaim) = _drop_in_place;
 
     unsafe fn _drop_box(ptr: *mut dyn Reclaim) {
         // Safety: Safe by the safety gurantees of retire and because it's only used when
@@ -125,7 +125,7 @@ pub mod deleters {
     ///
     /// Can only be used on values that were originally derived from a Box.
     #[allow(non_upper_case_globals)]
-    pub static drop_box: unsafe fn(*mut dyn Reclaim) = _drop_box;
+    pub const drop_box: unsafe fn(*mut dyn Reclaim) = _drop_box;
 }
 
 pub trait Reclaim {}

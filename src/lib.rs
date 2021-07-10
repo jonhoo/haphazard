@@ -309,23 +309,31 @@ impl HazPtrDomain {
         let mut reclaimed: usize = 0;
         while !node.is_null() {
             // Safety: All accessors only access the head, and the head is no longer pointing here.
-            let mut n = unsafe { Box::from_raw(node) };
-            node = *n.next.get_mut();
+            let current = node;
+            let n = unsafe { &*current };
+            node = n.next.load(Ordering::SeqCst);
 
             if guarded_ptrs.contains(&(n.ptr as *mut u8)) {
                 // Not safe to reclaim -- still guarded.
-                *n.next.get_mut() = remaining;
-                remaining = Box::into_raw(n);
+                n.next.store(remaining, Ordering::SeqCst);
+                remaining = current;
                 if tail.is_none() {
                     tail = Some(remaining);
                 }
             } else {
                 // No longer guarded -- reclaim using deleter.
+
+                // Safety: `current` has no hazard pointers guarding it, so we have the only
+                // remaining pointer.
+                let n = unsafe { Box::from_raw(current) };
+
                 // Safety:
-                // - `n.ptr` has not yet been dropped and will not be dropped again (we have removed it from `remaining`)
-                // - `n.ptr` has been allocated the corresponding allocation method corresponding to `n.deleter`
-                //   as per the safety guarantees of calling `retire`.
+                //  - `n.ptr` has not yet been dropped because it was still on `retired`.
+                //  - it will not be dropped again because we have removed it from `retired`.
+                //  - `n.ptr` was allocated by the corresponding allocation method as per the
+                //    safety guarantees of calling `retire`.
                 unsafe { n.deleter.delete(n.ptr) };
+
                 reclaimed += 1;
             }
         }

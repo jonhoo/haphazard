@@ -97,7 +97,7 @@ impl<'domain, F> HazPtrHolder<'domain, F> {
         }
     }
 
-    pub fn reset(&mut self) {
+    pub fn reset_protection(&mut self) {
         self.hazard.reset();
     }
 }

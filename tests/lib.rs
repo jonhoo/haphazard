@@ -29,7 +29,7 @@ fn feels_good() {
     let my_x = unsafe { h.protect(&x) }.expect("not null");
     // valid:
     assert_eq!(my_x.0, 42);
-    h.reset();
+    h.reset_protection();
     // invalid:
     // let _: i32 = my_x.0;
 

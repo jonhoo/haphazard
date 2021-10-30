@@ -7,6 +7,9 @@ use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicPtr, AtomicU64, AtomicUsi
 const SYNC_TIME_PERIOD: u64 = std::time::Duration::from_nanos(2000000000).as_nanos() as u64;
 const RCOUNT_THRESHOLD: isize = 1000;
 const HCOUNT_MULTIPLIER: isize = 2;
+const NUM_SHARDS: usize = 8;
+const IGNORED_LOW_BITS: u8 = 8;
+const SHARD_MASK: usize = NUM_SHARDS - 1;
 
 #[non_exhaustive]
 pub struct Global;
@@ -21,7 +24,7 @@ static SHARED_DOMAIN: Domain<Global> = Domain::new(&Global::new());
 // Holds linked list of HazPtrRecords
 pub struct Domain<F> {
     hazptrs: HazPtrRecords,
-    untagged: RetiredList,
+    untagged: [RetiredList; NUM_SHARDS],
     family: PhantomData<F>,
     due_time: AtomicU64,
     nbulk_reclaims: AtomicUsize,
@@ -44,14 +47,14 @@ macro_rules! unique_domain {
 
 impl<F> Domain<F> {
     pub const fn new(_: &F) -> Self {
+        // https://blog.rust-lang.org/2021/02/11/Rust-1.50.0.html#const-value-repetition-for-arrays
+        const RETIRED_LIST: RetiredList = RetiredList::new();
         Self {
             hazptrs: HazPtrRecords {
                 head: AtomicPtr::new(std::ptr::null_mut()),
                 count: AtomicIsize::new(0),
             },
-            untagged: RetiredList {
-                head: AtomicPtr::new(std::ptr::null_mut()),
-            },
+            untagged: [RETIRED_LIST; NUM_SHARDS],
             count: AtomicIsize::new(0),
             due_time: AtomicU64::new(0),
             nbulk_reclaims: AtomicUsize::new(0),
@@ -141,7 +144,7 @@ impl<F> Domain<F> {
         crate::asymmetric_light_barrier();
 
         let retired = Box::into_raw(retired);
-        unsafe { self.untagged.push(retired, retired) };
+        unsafe { self.untagged[Self::calc_shard(retired)].push(retired, retired) };
         self.count.fetch_add(1, Ordering::Release);
 
         self.check_threshold_and_reclaim();
@@ -204,9 +207,16 @@ impl<F> Domain<F> {
         let mut total_reclaimed = 0;
         loop {
             let mut done = true;
-            let stolen_head = self.untagged.pop_all();
+            let mut stolen_heads = [std::ptr::null_mut(); NUM_SHARDS];
+            let mut empty = true;
+            for i in 0..NUM_SHARDS {
+                stolen_heads[i] = self.untagged[i].pop_all();
+                if !stolen_heads[i].is_null() {
+                    empty = false;
+                }
+            }
 
-            if !stolen_head.is_null() {
+            if !empty {
                 crate::asymmetric_heavy_barrier(crate::HeavyBarrierKind::Expedited);
 
                 // Find all guarded addresses.
@@ -223,50 +233,12 @@ impl<F> Domain<F> {
                     node = n.next.load(Ordering::Relaxed);
                 }
 
-                // Sort nodes into those that can be reclaimed,
-                // and those that are still guarded
-                let mut node = stolen_head;
-                let mut reclaimable = std::ptr::null_mut();
-                let mut unreclaimed = std::ptr::null_mut();
-                let mut unreclaimed_tail = unreclaimed;
-                let mut nreclaimable: isize = 0;
+                let (nreclaimed, is_done) =
+                    self.match_reclaim_untagged(stolen_heads, &guarded_ptrs);
+                done = is_done;
 
-                while !node.is_null() {
-                    // Safety: All accessors only access the head, and the head is no longer pointing here.
-                    let n = unsafe { &*node };
-                    let next = n.next.load(Ordering::Relaxed);
-                    debug_assert_ne!(node, next);
-
-                    if !guarded_ptrs.contains(&(n.ptr as *mut u8)) {
-                        // No longer guarded -- safe to reclaim.
-                        n.next.store(reclaimable, Ordering::Relaxed);
-                        reclaimable = node;
-                        nreclaimable += 1;
-                    } else {
-                        // Not safe to reclaim -- still guarded.
-                        n.next.store(unreclaimed, Ordering::Relaxed);
-                        unreclaimed = node;
-                        if unreclaimed_tail.is_null() {
-                            unreclaimed_tail = unreclaimed;
-                        }
-                    }
-
-                    node = next;
-                }
-
-                // Safety:
-                //
-                // 1. No item in `reclaimable` has a hazard pointer guarding it, so we have the
-                //    only remaining pointer to each item.
-                // 2. Every Retired was originally constructed from a Box, and is thus valid.
-                // 3. None of these Retired have been dropped previously, because we atomically
-                //    stole the entire sublist from self.untagged.
-                unsafe { self.reclaim_unprotected(reclaimable) };
-                done = self.untagged.is_empty();
-                unsafe { self.untagged.push(unreclaimed, unreclaimed_tail) };
-
-                rcount -= nreclaimable;
-                total_reclaimed += nreclaimable as usize;
+                rcount -= nreclaimed as isize;
+                total_reclaimed += nreclaimed;
             }
 
             if rcount != 0 {
@@ -279,6 +251,63 @@ impl<F> Domain<F> {
         }
         self.nbulk_reclaims.fetch_sub(1, Ordering::Acquire);
         total_reclaimed
+    }
+
+    fn match_reclaim_untagged(
+        &self,
+        stolen_heads: [*mut Retired; NUM_SHARDS],
+        guarded_ptrs: &HashSet<*mut u8>,
+    ) -> (usize, bool) {
+        let mut unreclaimed = std::ptr::null_mut();
+        let mut unreclaimed_tail = unreclaimed;
+        let mut nreclaimed = 0;
+
+        for i in 0..NUM_SHARDS {
+            // Sort nodes into those that can be reclaimed,
+            // and those that are still guarded
+            let mut node = stolen_heads[i];
+            // XXX: This can probably also be hoisted out of the loop, and we can do a _single_
+            // reclaim_unprotected call as well.
+            let mut reclaimable = std::ptr::null_mut();
+
+            while !node.is_null() {
+                // Safety: All accessors only access the head, and the head is no longer pointing here.
+                let n = unsafe { &*node };
+                let next = n.next.load(Ordering::Relaxed);
+                debug_assert_ne!(node, next);
+
+                if !guarded_ptrs.contains(&(n.ptr as *mut u8)) {
+                    // No longer guarded -- safe to reclaim.
+                    n.next.store(reclaimable, Ordering::Relaxed);
+                    reclaimable = node;
+                    nreclaimed += 1;
+                } else {
+                    // Not safe to reclaim -- still guarded.
+                    n.next.store(unreclaimed, Ordering::Relaxed);
+                    unreclaimed = node;
+                    if unreclaimed_tail.is_null() {
+                        unreclaimed_tail = unreclaimed;
+                    }
+                }
+
+                node = next;
+            }
+
+            // Safety:
+            //
+            // 1. No item in `reclaimable` has a hazard pointer guarding it, so we have the
+            //    only remaining pointer to each item.
+            // 2. Every Retired was originally constructed from a Box, and is thus valid.
+            // 3. None of these Retired have been dropped previously, because we atomically
+            //    stole the entire sublist from self.untagged.
+            unsafe { self.reclaim_unprotected(reclaimable) };
+        }
+
+        let done = self.untagged.iter().all(|u| u.is_empty());
+        // NOTE: We're _not_ respecting sharding here, presumably to avoid multiple push CASes.
+        unsafe { self.untagged[0].push(unreclaimed, unreclaimed_tail) };
+
+        (nreclaimed, done)
     }
 
     // # Safety
@@ -324,10 +353,12 @@ impl<F> Domain<F> {
     }
 
     fn reclaim_all_objects(&mut self) {
-        let head = self.untagged.pop_all();
-        // Safety: &mut self implies that there are no active Hazard Pointers.
-        // So, all objects are safe to reclaim.
-        unsafe { self.reclaim_list_transitive(head) };
+        for i in 0..NUM_SHARDS {
+            let head = self.untagged[i].pop_all();
+            // Safety: &mut self implies that there are no active Hazard Pointers.
+            // So, all objects are safe to reclaim.
+            unsafe { self.reclaim_list_transitive(head) };
+        }
     }
 
     unsafe fn reclaim_list_transitive(&self, head: *mut Retired) {
@@ -356,6 +387,10 @@ impl<F> Domain<F> {
             node = *n.next.get_mut();
             drop(n);
         }
+    }
+
+    fn calc_shard(input: *mut Retired) -> usize {
+        (input as usize >> IGNORED_LOW_BITS) & SHARD_MASK
     }
 }
 
@@ -402,6 +437,12 @@ struct RetiredList {
 }
 
 impl RetiredList {
+    const fn new() -> Self {
+        Self {
+            head: AtomicPtr::new(std::ptr::null_mut()),
+        }
+    }
+
     unsafe fn push(&self, sublist_head: *mut Retired, sublist_tail: *mut Retired) {
         if sublist_head.is_null() {
             // Pushing an empty list is easy.

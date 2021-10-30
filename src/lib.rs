@@ -6,7 +6,7 @@ mod deleter;
 mod domain;
 mod holder;
 mod object;
-mod ptr;
+mod record;
 
 fn asymmetric_light_barrier() {
     // TODO: if cfg!(linux) {
@@ -27,7 +27,7 @@ fn asymmetric_heavy_barrier(_: HeavyBarrierKind) {
 pub use domain::Global;
 
 pub use deleter::{deleters, Deleter, Reclaim};
-pub use domain::HazPtrDomain;
-pub use holder::HazPtrHolder;
+pub use domain::Domain;
+pub use holder::HazardPointer;
 pub use object::{HazPtrObject, HazPtrObjectWrapper};
-pub use ptr::HazPtr;
+pub(crate) use record::HazPtrRecord;

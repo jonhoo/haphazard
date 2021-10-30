@@ -1,20 +1,20 @@
-use crate::{HazPtr, HazPtrDomain, HazPtrObject};
+use crate::{Domain, HazPtrObject, HazPtrRecord};
 use std::sync::atomic::AtomicPtr;
 use std::sync::atomic::Ordering;
 
-pub struct HazPtrHolder<'domain, F> {
-    hazard: &'domain HazPtr,
-    domain: &'domain HazPtrDomain<F>,
+pub struct HazardPointer<'domain, F> {
+    hazard: &'domain HazPtrRecord,
+    domain: &'domain Domain<F>,
 }
 
-impl HazPtrHolder<'static, crate::Global> {
-    pub fn global() -> Self {
-        HazPtrHolder::for_domain(HazPtrDomain::global())
+impl HazardPointer<'static, crate::Global> {
+    pub fn make_global() -> Self {
+        HazardPointer::make_in_domain(Domain::global())
     }
 }
 
-impl<'domain, F> HazPtrHolder<'domain, F> {
-    pub fn for_domain(domain: &'domain HazPtrDomain<F>) -> Self {
+impl<'domain, F> HazardPointer<'domain, F> {
+    pub fn make_in_domain(domain: &'domain Domain<F>) -> Self {
         Self {
             hazard: domain.acquire(),
             domain,
@@ -26,7 +26,7 @@ impl<'domain, F> HazPtrHolder<'domain, F> {
     ///
     /// Caller must guarantee that the address in `AtomicPtr` is valid as a reference, or null.
     /// Caller must also guarantee that the value behind the `AtomicPtr` will only be deallocated
-    /// through calls to [`HazPtrObject::retire`] on the same [`HazPtrDomain`] as this holder is
+    /// through calls to [`HazPtrObject::retire`] on the same [`Domain`] as this holder is
     /// associated with.
     pub unsafe fn protect<'l, 'o, T>(&'l mut self, src: &'_ AtomicPtr<T>) -> Option<&'l T>
     where
@@ -58,7 +58,7 @@ impl<'domain, F> HazPtrHolder<'domain, F> {
     ///
     /// Caller must guarantee that the address in `AtomicPtr` is valid as a reference, or null.
     /// Caller must also guarantee that the value behind the `AtomicPtr` will only be deallocated
-    /// through calls to [`HazPtrObject::retire`] on the same [`HazPtrDomain`] as this holder is
+    /// through calls to [`HazPtrObject::retire`] on the same [`Domain`] as this holder is
     /// associated with.
     pub unsafe fn try_protect<'l, 'o, T>(
         &'l mut self,
@@ -88,8 +88,8 @@ impl<'domain, F> HazPtrHolder<'domain, F> {
                 //  2. Pointer address is valid by the safety contract of load.
                 let r = unsafe { nn.as_ref() };
                 debug_assert_eq!(
-                    self.domain as *const HazPtrDomain<F>,
-                    r.domain() as *const HazPtrDomain<F>,
+                    self.domain as *const Domain<F>,
+                    r.domain() as *const Domain<F>,
                     "object guarded by different domain than holder used to access it"
                 );
                 r
@@ -102,7 +102,7 @@ impl<'domain, F> HazPtrHolder<'domain, F> {
     }
 }
 
-impl<F> Drop for HazPtrHolder<'_, F> {
+impl<F> Drop for HazardPointer<'_, F> {
     fn drop(&mut self) {
         self.hazard.reset();
         self.domain.release(self.hazard);

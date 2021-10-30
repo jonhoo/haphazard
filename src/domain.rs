@@ -1,4 +1,4 @@
-use crate::{Deleter, HazPtr, Reclaim};
+use crate::{Deleter, HazPtrRecord, Reclaim};
 use std::collections::HashSet;
 use std::marker::PhantomData;
 use std::sync::atomic::Ordering;
@@ -16,18 +16,18 @@ impl Global {
     }
 }
 
-static SHARED_DOMAIN: HazPtrDomain<Global> = HazPtrDomain::new(&Global::new());
+static SHARED_DOMAIN: Domain<Global> = Domain::new(&Global::new());
 
-// Holds linked list of HazPtrs
-pub struct HazPtrDomain<F> {
-    hazptrs: HazPtrs,
+// Holds linked list of HazPtrRecords
+pub struct Domain<F> {
+    hazptrs: HazPtrRecords,
     retired: RetiredList,
     family: PhantomData<F>,
     sync_time: AtomicU64,
     nbulk_reclaims: AtomicUsize,
 }
 
-impl HazPtrDomain<Global> {
+impl Domain<Global> {
     pub fn global() -> &'static Self {
         &SHARED_DOMAIN
     }
@@ -36,14 +36,14 @@ impl HazPtrDomain<Global> {
 #[macro_export]
 macro_rules! unique_domain {
     () => {
-        HazPtrDomain::new(&|| {})
+        Domain::new(&|| {})
     };
 }
 
-impl<F> HazPtrDomain<F> {
+impl<F> Domain<F> {
     pub const fn new(_: &F) -> Self {
         Self {
-            hazptrs: HazPtrs {
+            hazptrs: HazPtrRecords {
                 head: AtomicPtr::new(std::ptr::null_mut()),
                 count: AtomicIsize::new(0),
             },
@@ -57,7 +57,7 @@ impl<F> HazPtrDomain<F> {
         }
     }
 
-    pub(crate) fn acquire(&self) -> &HazPtr {
+    pub(crate) fn acquire(&self) -> &HazPtrRecord {
         if let Some(hazptr) = self.try_acquire_existing() {
             hazptr
         } else {
@@ -65,11 +65,11 @@ impl<F> HazPtrDomain<F> {
         }
     }
 
-    fn try_acquire_existing(&self) -> Option<&HazPtr> {
+    fn try_acquire_existing(&self) -> Option<&HazPtrRecord> {
         let head_ptr = &self.hazptrs.head;
         let mut node = head_ptr.load(Ordering::Acquire);
         while !node.is_null() {
-            // Safety: HazPtrs are never de-allocated while the domain lives.
+            // Safety: HazPtrRecords are never de-allocated while the domain lives.
             let n = unsafe { &*node };
             if n.try_acquire() {
                 return Some(n);
@@ -79,9 +79,9 @@ impl<F> HazPtrDomain<F> {
         None
     }
 
-    pub(crate) fn acquire_new(&self) -> &HazPtr {
-        // No free HazPtrs -- need to allocate a new one
-        let hazptr = Box::into_raw(Box::new(HazPtr {
+    pub(crate) fn acquire_new(&self) -> &HazPtrRecord {
+        // No free HazPtrRecords -- need to allocate a new one
+        let hazptr = Box::into_raw(Box::new(HazPtrRecord {
             ptr: AtomicPtr::new(std::ptr::null_mut()),
             next: AtomicPtr::new(std::ptr::null_mut()),
             active: AtomicBool::new(true),
@@ -102,7 +102,7 @@ impl<F> HazPtrDomain<F> {
                     // NOTE: Folly uses SeqCst because it's the default, not clear if
                     // necessary.
                     self.hazptrs.count.fetch_add(1, Ordering::SeqCst);
-                    // Safety: HazPtrs are never de-allocated while the domain lives.
+                    // Safety: HazPtrRecords are never de-allocated while the domain lives.
                     break unsafe { &*hazptr };
                 }
                 Err(head_now) => {
@@ -249,7 +249,7 @@ impl<F> HazPtrDomain<F> {
             let mut guarded_ptrs = HashSet::new();
             let mut node = self.hazptrs.head.load(Ordering::Acquire);
             while !node.is_null() {
-                // Safety: HazPtrs are never de-allocated while the domain lives.
+                // Safety: HazPtrRecords are never de-allocated while the domain lives.
                 let n = unsafe { &*node };
                 // NOTE: Folly doesn't skip active here, but that seems wrong?
                 if n.active.load(Ordering::SeqCst) {
@@ -361,12 +361,12 @@ impl<F> HazPtrDomain<F> {
         self.bulk_reclaim(true)
     }
 
-    pub(crate) fn release(&self, hazard: &HazPtr) {
+    pub(crate) fn release(&self, hazard: &HazPtrRecord) {
         hazard.release();
     }
 }
 
-impl<F> Drop for HazPtrDomain<F> {
+impl<F> Drop for Domain<F> {
     fn drop(&mut self) {
         // There should be no hazard pointers active, so all retired objects can be reclaimed.
         let nretired = *self.retired.count.get_mut();
@@ -375,11 +375,11 @@ impl<F> Drop for HazPtrDomain<F> {
         assert!(self.retired.head.get_mut().is_null());
 
         // Also drop all hazard pointers, as no-one should be holding them any more.
-        let mut node: *mut HazPtr = *self.hazptrs.head.get_mut();
+        let mut node: *mut HazPtrRecord = *self.hazptrs.head.get_mut();
         while !node.is_null() {
             // Safety: we're in Drop, so no-one holds any of our hazard pointers any more,
             // as all holders are tied to 'domain (which must have expired on drop).
-            let mut n: Box<HazPtr> = unsafe { Box::from_raw(node) };
+            let mut n: Box<HazPtrRecord> = unsafe { Box::from_raw(node) };
             assert!(!*n.active.get_mut());
             node = *n.next.get_mut();
             drop(n);
@@ -387,8 +387,8 @@ impl<F> Drop for HazPtrDomain<F> {
     }
 }
 
-struct HazPtrs {
-    head: AtomicPtr<HazPtr>,
+struct HazPtrRecords {
+    head: AtomicPtr<HazPtrRecord>,
     count: AtomicIsize,
 }
 
@@ -404,7 +404,7 @@ impl Retired {
     ///
     /// `ptr` will not be accessed after `'domain` ends.
     unsafe fn new<'domain, F>(
-        _: &'domain HazPtrDomain<F>,
+        _: &'domain Domain<F>,
         ptr: *mut (dyn Reclaim + 'domain),
         deleter: &'static dyn Deleter,
     ) -> Self {
@@ -423,9 +423,9 @@ struct RetiredList {
 
 /*
 fn foo() {
-    let domain = HazPtrDomain::new();
+    let domain = Domain::new();
     'a: {
-        let d: &'a HazPtrDomain = &domain;
+        let d: &'a Domain = &domain;
         let t = String::new();
         let z: Box<PrintOnDrop<&'a String>> = Box::new(PrintOnDrop(&t));
         d.retire(z); // z goes on .retired, but is _not_ dropped
@@ -439,16 +439,16 @@ fn foo() {
 /// ```compile_fail
 /// use std::sync::atomic::AtomicPtr;
 /// use haphazard::*;
-/// let dw = HazPtrDomain::global();
-/// let dr = HazPtrDomain::new(&());
+/// let dw = Domain::global();
+/// let dr = Domain::new(&());
 ///
 /// let x = AtomicPtr::new(Box::into_raw(Box::new(HazPtrObjectWrapper::with_domain(&dw, 42))));
 ///
 /// // Reader uses a different domain thant the writer!
-/// let mut h = HazPtrHolder::for_domain(&dr);
+/// let mut h = HazardPointer::make_in_domain(&dr);
 ///
 /// // This shouldn't compile because families differ.
-/// let _ = unsafe { h.load(&x) }.expect("not null");
+/// let _ = unsafe { h.protect(&x) }.expect("not null");
 /// ```
 #[cfg(doctest)]
 struct CannotConfuseGlobalWriter;
@@ -456,16 +456,16 @@ struct CannotConfuseGlobalWriter;
 /// ```compile_fail
 /// use std::sync::atomic::AtomicPtr;
 /// use haphazard::*;
-/// let dw = HazPtrDomain::new(&());
-/// let dr = HazPtrDomain::global();
+/// let dw = Domain::new(&());
+/// let dr = Domain::global();
 ///
 /// let x = AtomicPtr::new(Box::into_raw(Box::new(HazPtrObjectWrapper::with_domain(&dw, 42))));
 ///
 /// // Reader uses a different domain thant the writer!
-/// let mut h = HazPtrHolder::for_domain(&dr);
+/// let mut h = HazardPointer::make_in_domain(&dr);
 ///
 /// // This shouldn't compile because families differ.
-/// let _ = unsafe { h.load(&x) }.expect("not null");
+/// let _ = unsafe { h.protect(&x) }.expect("not null");
 /// ```
 #[cfg(doctest)]
 struct CannotConfuseGlobalReader;
@@ -479,10 +479,10 @@ struct CannotConfuseGlobalReader;
 /// let x = AtomicPtr::new(Box::into_raw(Box::new(HazPtrObjectWrapper::with_domain(&dw, 42))));
 ///
 /// // Reader uses a different domain thant the writer!
-/// let mut h = HazPtrHolder::for_domain(&dr);
+/// let mut h = HazardPointer::make_in_domain(&dr);
 ///
 /// // This shouldn't compile because families differ.
-/// let _ = unsafe { h.load(&x) }.expect("not null");
+/// let _ = unsafe { h.protect(&x) }.expect("not null");
 /// ```
 #[cfg(doctest)]
 struct CannotConfuseAcrossFamilies;

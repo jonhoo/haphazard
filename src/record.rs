@@ -1,13 +1,13 @@
 use std::sync::atomic::Ordering;
 use std::sync::atomic::{AtomicBool, AtomicPtr};
 
-pub struct HazPtr {
+pub(crate) struct HazPtrRecord {
     pub(crate) ptr: AtomicPtr<u8>,
-    pub(crate) next: AtomicPtr<HazPtr>,
+    pub(crate) next: AtomicPtr<HazPtrRecord>,
     pub(crate) active: AtomicBool,
 }
 
-impl HazPtr {
+impl HazPtrRecord {
     pub(crate) fn reset(&self) {
         self.ptr.store(std::ptr::null_mut(), Ordering::Release);
     }

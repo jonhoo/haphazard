@@ -20,7 +20,7 @@ fn feels_good() {
     )));
 
     // As a reader:
-    let mut h = HazPtrHolder::global();
+    let mut h = HazardPointer::make_global();
 
     // Safety:
     //
@@ -40,10 +40,10 @@ fn feels_good() {
     // invalid:
     // let _: i32 = my_x.0;
 
-    let mut h = HazPtrHolder::global();
+    let mut h = HazardPointer::make_global();
     let my_x = unsafe { h.protect(&x) }.expect("not null");
 
-    let mut h_tmp = HazPtrHolder::global();
+    let mut h_tmp = HazardPointer::make_global();
     let _ = unsafe { h_tmp.protect(&x) }.expect("not null");
     drop(h_tmp);
 
@@ -57,7 +57,7 @@ fn feels_good() {
         std::sync::atomic::Ordering::SeqCst,
     );
 
-    let mut h2 = HazPtrHolder::global();
+    let mut h2 = HazardPointer::make_global();
     let my_x2 = unsafe { h2.protect(&x) }.expect("not null");
 
     assert_eq!(my_x.0, 42);
@@ -73,7 +73,7 @@ fn feels_good() {
     assert_eq!(drops_42.load(Ordering::SeqCst), 0);
     assert_eq!(my_x.0, 42);
 
-    let n = HazPtrDomain::global().eager_reclaim();
+    let n = Domain::global().eager_reclaim();
     assert_eq!(n, 0);
 
     assert_eq!(drops_42.load(Ordering::SeqCst), 0);
@@ -83,14 +83,14 @@ fn feels_good() {
     assert_eq!(drops_42.load(Ordering::SeqCst), 0);
     // _not_ drop(h2);
 
-    let n = HazPtrDomain::global().eager_reclaim();
+    let n = Domain::global().eager_reclaim();
     assert_eq!(n, 1);
 
     assert_eq!(drops_42.load(Ordering::SeqCst), 1);
     assert_eq!(drops_9001.load(Ordering::SeqCst), 0);
 
     drop(h2);
-    let n = HazPtrDomain::global().eager_reclaim();
+    let n = Domain::global().eager_reclaim();
     assert_eq!(n, 0);
     assert_eq!(drops_9001.load(Ordering::SeqCst), 0);
 }
@@ -98,8 +98,8 @@ fn feels_good() {
 #[test]
 #[should_panic]
 fn feels_bad() {
-    let dw = HazPtrDomain::new(&());
-    let dr = HazPtrDomain::new(&());
+    let dw = Domain::new(&());
+    let dr = Domain::new(&());
 
     let drops_42 = Arc::new(AtomicUsize::new(0));
 
@@ -109,7 +109,7 @@ fn feels_bad() {
     ))));
 
     // Reader uses a different domain thant the writer!
-    let mut h = HazPtrHolder::for_domain(&dr);
+    let mut h = HazardPointer::make_in_domain(&dr);
 
     // Let's hope this catches the error (at least in debug mode).
     let _ = unsafe { h.protect(&x) }.expect("not null");

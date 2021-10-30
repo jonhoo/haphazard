@@ -21,10 +21,12 @@ static SHARED_DOMAIN: Domain<Global> = Domain::new(&Global::new());
 // Holds linked list of HazPtrRecords
 pub struct Domain<F> {
     hazptrs: HazPtrRecords,
-    retired: RetiredList,
+    untagged: RetiredList,
     family: PhantomData<F>,
-    sync_time: AtomicU64,
+    due_time: AtomicU64,
     nbulk_reclaims: AtomicUsize,
+    count: AtomicIsize,
+    shutdown: bool,
 }
 
 impl Domain<Global> {
@@ -47,13 +49,14 @@ impl<F> Domain<F> {
                 head: AtomicPtr::new(std::ptr::null_mut()),
                 count: AtomicIsize::new(0),
             },
-            retired: RetiredList {
+            untagged: RetiredList {
                 head: AtomicPtr::new(std::ptr::null_mut()),
-                count: AtomicIsize::new(0),
             },
-            sync_time: AtomicU64::new(0),
+            count: AtomicIsize::new(0),
+            due_time: AtomicU64::new(0),
             nbulk_reclaims: AtomicUsize::new(0),
             family: PhantomData,
+            shutdown: false,
         }
     }
 
@@ -124,266 +127,244 @@ impl<F> Domain<F> {
         // First, stick ptr onto the list of retired objects.
         //
         // Safety: ptr will not be accessed after Domain is dropped, which is when 'domain ends.
-        let retired = Box::into_raw(Box::new(unsafe { Retired::new(self, ptr, deleter) }));
+        let retired = Box::new(unsafe { Retired::new(self, ptr, deleter) });
+
+        self.push_list(retired);
+    }
+
+    fn push_list(&self, mut retired: Box<Retired>) {
+        assert!(
+            retired.next.get_mut().is_null(),
+            "only single item retiring is supported atm"
+        );
 
         crate::asymmetric_light_barrier();
 
-        // Stick it at the head of the linked list
-        let head_ptr = &self.retired.head;
-        let mut head = head_ptr.load(Ordering::Acquire);
-        loop {
-            // Safety: retired was never shared, so &mut is ok.
-            *unsafe { &mut *retired }.next.get_mut() = head;
-            match head_ptr.compare_exchange_weak(
-                head,
-                retired,
-                // NOTE: Folly uses Release, but needs to be both for the load on success.
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            ) {
-                Ok(_) => break,
-                Err(head_now) => {
-                    // Head has changed, try again with that as our next ptr.
-                    head = head_now
-                }
+        let retired = Box::into_raw(retired);
+        unsafe { self.untagged.push(retired, retired) };
+        self.count.fetch_add(1, Ordering::Release);
+
+        self.check_threshold_and_reclaim();
+    }
+
+    fn threshold(&self) -> isize {
+        RCOUNT_THRESHOLD.max(HCOUNT_MULTIPLIER * self.hazptrs.count.load(Ordering::Acquire))
+    }
+
+    fn check_count_threshold(&self) -> isize {
+        let rcount = self.count.load(Ordering::Acquire);
+        while rcount > self.threshold() {
+            if self
+                .count
+                .compare_exchange_weak(rcount, 0, Ordering::AcqRel, Ordering::Relaxed)
+                .is_ok()
+            {
+                self.due_time
+                    .store(Self::now() + SYNC_TIME_PERIOD, Ordering::Release);
+                return rcount;
+            }
+        }
+        0
+    }
+
+    fn check_due_time(&self) -> isize {
+        let time = Self::now();
+        let due = self.due_time.load(Ordering::Acquire);
+        if time < due
+            || self
+                .due_time
+                .compare_exchange(
+                    due,
+                    time + SYNC_TIME_PERIOD,
+                    Ordering::AcqRel,
+                    Ordering::Relaxed,
+                )
+                .is_err()
+        {
+            // Not yet due, or someone else noticed we were due already.
+            return 0;
+        }
+        self.count.swap(0, Ordering::AcqRel)
+    }
+
+    fn check_threshold_and_reclaim(&self) {
+        let mut rcount = self.check_count_threshold();
+        if rcount == 0 {
+            rcount = self.check_due_time();
+            if rcount == 0 {
+                return;
             }
         }
 
-        self.retired.count.fetch_add(1, Ordering::Release);
-
-        // Folly has if check here, but only for recursion from bulk_lookup_and_reclaim,
-        // which we don't do, so check isn't necessary.
-        self.check_cleanup_and_reclaim();
+        self.nbulk_reclaims.fetch_add(1, Ordering::Acquire);
+        self.do_reclamation(rcount);
     }
 
-    fn check_cleanup_and_reclaim(&self) {
-        if self.try_timed_cleanup() {
-            return;
+    fn do_reclamation(&self, mut rcount: isize) -> usize {
+        let mut total_reclaimed = 0;
+        loop {
+            let mut done = true;
+            let stolen_head = self.untagged.pop_all();
+
+            if !stolen_head.is_null() {
+                crate::asymmetric_heavy_barrier(crate::HeavyBarrierKind::Expedited);
+
+                // Find all guarded addresses.
+                #[allow(clippy::mutable_key_type)]
+                let mut guarded_ptrs = HashSet::new();
+                let mut node = self.hazptrs.head.load(Ordering::Acquire);
+                while !node.is_null() {
+                    // Safety: HazPtrRecords are never de-allocated while the domain lives.
+                    let n = unsafe { &*node };
+                    // NOTE: Folly doesn't skip active here, but that seems wrong?
+                    if n.active.load(Ordering::SeqCst) {
+                        guarded_ptrs.insert(n.ptr.load(Ordering::Acquire));
+                    }
+                    node = n.next.load(Ordering::Relaxed);
+                }
+
+                // Sort nodes into those that can be reclaimed,
+                // and those that are still guarded
+                let mut node = stolen_head;
+                let mut reclaimable = std::ptr::null_mut();
+                let mut unreclaimed = std::ptr::null_mut();
+                let mut unreclaimed_tail = unreclaimed;
+                let mut nreclaimable: isize = 0;
+
+                while !node.is_null() {
+                    // Safety: All accessors only access the head, and the head is no longer pointing here.
+                    let n = unsafe { &*node };
+                    let next = n.next.load(Ordering::Relaxed);
+                    debug_assert_ne!(node, next);
+
+                    if !guarded_ptrs.contains(&(n.ptr as *mut u8)) {
+                        // No longer guarded -- safe to reclaim.
+                        n.next.store(reclaimable, Ordering::Relaxed);
+                        reclaimable = node;
+                        nreclaimable += 1;
+                    } else {
+                        // Not safe to reclaim -- still guarded.
+                        n.next.store(unreclaimed, Ordering::Relaxed);
+                        unreclaimed = node;
+                        if unreclaimed_tail.is_null() {
+                            unreclaimed_tail = unreclaimed;
+                        }
+                    }
+
+                    node = next;
+                }
+
+                // Safety:
+                //
+                // 1. No item in `reclaimable` has a hazard pointer guarding it, so we have the
+                //    only remaining pointer to each item.
+                // 2. Every Retired was originally constructed from a Box, and is thus valid.
+                // 3. None of these Retired have been dropped previously, because we atomically
+                //    stole the entire sublist from self.untagged.
+                unsafe { self.reclaim_unprotected(reclaimable) };
+                done = self.untagged.is_empty();
+                unsafe { self.untagged.push(unreclaimed, unreclaimed_tail) };
+
+                rcount -= nreclaimable;
+                total_reclaimed += nreclaimable as usize;
+            }
+
+            if rcount != 0 {
+                self.count.fetch_add(rcount, Ordering::Release);
+            }
+            rcount = self.check_count_threshold();
+            if rcount == 0 && done {
+                break;
+            }
         }
-        if Self::reached_threshold(
-            self.retired.count.load(Ordering::Acquire),
-            self.hazptrs.count.load(Ordering::Acquire),
-        ) {
-            self.try_bulk_reclaim();
+        self.nbulk_reclaims.fetch_sub(1, Ordering::Acquire);
+        total_reclaimed
+    }
+
+    // # Safety
+    //
+    // All `Retired` nodes in `retired` are valid, unaliased, and can be taken ownership of.
+    unsafe fn reclaim_unprotected(&self, mut retired: *mut Retired) {
+        while !retired.is_null() {
+            let next = unsafe { &*retired }.next.load(Ordering::Relaxed);
+            let n = unsafe { Box::from_raw(retired) };
+
+            // Safety:
+            //  - `n.ptr` has not yet been dropped because it was still on `retired`.
+            //  - it will not be dropped again because we have removed it from `retired`.
+            //  - `n.ptr` was allocated by the corresponding allocation method as per the
+            //    safety guarantees of calling `retire`.
+            unsafe { n.deleter.delete(n.ptr) };
+
+            // TODO: Support linked nodes for more efficient deallocation (`children`).
+
+            retired = next;
         }
     }
 
-    fn try_timed_cleanup(&self) -> bool {
-        if !self.check_sync_time() {
-            return false;
-        }
-        self.relaxed_cleanup();
-        true
-    }
-
-    fn check_sync_time(&self) -> bool {
+    fn now() -> u64 {
         use std::convert::TryFrom;
-        let time = u64::try_from(
+        u64::try_from(
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .expect("system time is set to before the epoch")
                 .as_nanos(),
         )
-        .expect("system time is too far into the future");
-        let sync_time = self.sync_time.load(Ordering::Relaxed);
-
-        // If it's not time to clean yet, or someone else just started cleaning, don't clean.
-        time > sync_time
-            && self
-                .sync_time
-                .compare_exchange(
-                    sync_time,
-                    time + SYNC_TIME_PERIOD,
-                    Ordering::Relaxed,
-                    Ordering::Relaxed,
-                )
-                .is_ok()
-    }
-
-    fn relaxed_cleanup(&self) {
-        self.retired.count.store(0, Ordering::Release);
-        self.bulk_reclaim(true);
-    }
-
-    const fn reached_threshold(rc: isize, hc: isize) -> bool {
-        rc >= RCOUNT_THRESHOLD && rc >= HCOUNT_MULTIPLIER * hc
-    }
-
-    fn try_bulk_reclaim(&self) {
-        let hc = self.hazptrs.count.load(Ordering::Acquire);
-        let rc = self.retired.count.load(Ordering::Acquire);
-        if !Self::reached_threshold(rc, hc) {
-            return;
-        }
-
-        let rc = self.retired.count.swap(0, Ordering::Release);
-        if !Self::reached_threshold(rc, hc) {
-            // No need to add `rc` back to `self.retired.count`.
-            // At least one concurrent `try_bulk_reclaim` will proceed to `bulk_reclaim`.
-            return;
-        }
-
-        self.bulk_reclaim(false);
-    }
-
-    fn bulk_reclaim(&self, transitive: bool) -> usize {
-        self.nbulk_reclaims.fetch_add(1, Ordering::Acquire);
-
-        let mut reclaimed = 0;
-
-        loop {
-            let steal = self
-                .retired
-                .head
-                .swap(std::ptr::null_mut(), Ordering::Acquire);
-
-            crate::asymmetric_heavy_barrier(crate::HeavyBarrierKind::Expedited);
-
-            if steal.is_null() {
-                // Nothing to reclaim!
-                return reclaimed;
-            }
-
-            // Find all guarded addresses.
-            #[allow(clippy::mutable_key_type)]
-            let mut guarded_ptrs = HashSet::new();
-            let mut node = self.hazptrs.head.load(Ordering::Acquire);
-            while !node.is_null() {
-                // Safety: HazPtrRecords are never de-allocated while the domain lives.
-                let n = unsafe { &*node };
-                // NOTE: Folly doesn't skip active here, but that seems wrong?
-                if n.active.load(Ordering::SeqCst) {
-                    guarded_ptrs.insert(n.ptr.load(Ordering::Acquire));
-                }
-                node = n.next.load(Ordering::Relaxed);
-            }
-
-            let (reclaimed_now, done) = self.bulk_lookup_and_reclaim(steal, guarded_ptrs);
-            reclaimed += reclaimed_now;
-            if done || !transitive {
-                break;
-            }
-        }
-        self.nbulk_reclaims.fetch_sub(1, Ordering::Release);
-        reclaimed
-    }
-
-    fn bulk_lookup_and_reclaim(
-        &self,
-        stolen_retired_head: *mut Retired,
-        guarded_ptrs: HashSet<*mut u8>,
-    ) -> (usize, bool) {
-        // Reclaim any retired objects that aren't guarded
-        let mut node = stolen_retired_head;
-        let mut remaining = std::ptr::null_mut();
-        let mut tail = None;
-        let mut reclaimed: usize = 0;
-        let mut still_retired: isize = 0;
-
-        while !node.is_null() {
-            // Safety: All accessors only access the head, and the head is no longer pointing here.
-            let n = unsafe { &*node };
-            let next = n.next.load(Ordering::Relaxed);
-            debug_assert_ne!(node, next);
-
-            if !guarded_ptrs.contains(&(n.ptr as *mut u8)) {
-                // No longer guarded -- reclaim using deleter.
-
-                // Safety: `current` has no hazard pointers guarding it, so we have the only
-                // remaining pointer.
-                let n = unsafe { Box::from_raw(node) };
-
-                // Safety:
-                //  - `n.ptr` has not yet been dropped because it was still on `retired`.
-                //  - it will not be dropped again because we have removed it from `retired`.
-                //  - `n.ptr` was allocated by the corresponding allocation method as per the
-                //    safety guarantees of calling `retire`.
-                unsafe { n.deleter.delete(n.ptr) };
-
-                // TODO: Support linked nodes for more efficient deallocation (`children`).
-
-                reclaimed += 1;
-            } else {
-                // Not safe to reclaim -- still guarded.
-                n.next.store(remaining, Ordering::Relaxed);
-                remaining = node;
-                if tail.is_none() {
-                    tail = Some(remaining);
-                }
-                still_retired += 1;
-            }
-
-            node = next;
-        }
-
-        let done = self.retired.head.load(Ordering::Acquire).is_null();
-
-        let tail = if let Some(tail) = tail {
-            assert!(!remaining.is_null());
-            assert_ne!(still_retired, 0);
-            // NOTE: Folly here calls push_retired, we do the push inline below.
-            tail
-        } else {
-            assert!(remaining.is_null());
-            assert_eq!(still_retired, 0);
-            return (reclaimed, done);
-        };
-
-        crate::asymmetric_light_barrier();
-
-        let head_ptr = &self.retired.head;
-        let mut head = head_ptr.load(Ordering::Acquire);
-        loop {
-            // Safety: we still have exclusive access to remaining, which includes tail.
-            *unsafe { &mut *tail }.next.get_mut() = head;
-            match head_ptr.compare_exchange_weak(
-                head,
-                remaining,
-                // NOTE: Folly uses Release, but needs to be both for the load on success.
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            ) {
-                Ok(_) => break,
-                Err(head_now) => {
-                    // Head has changed, try again with that as our next ptr.
-                    head = head_now
-                }
-            }
-        }
-
-        self.retired
-            .count
-            .fetch_add(still_retired, Ordering::Release);
-        (reclaimed, done)
+        .expect("system time is too far into the future")
     }
 
     pub fn eager_reclaim(&self) -> usize {
-        self.bulk_reclaim(true)
+        let rcount = self.count.swap(0, Ordering::AcqRel);
+        self.nbulk_reclaims.fetch_add(1, Ordering::Acquire);
+        self.do_reclamation(rcount)
     }
 
     pub(crate) fn release(&self, hazard: &HazPtrRecord) {
         hazard.release();
     }
+
+    fn reclaim_all_objects(&mut self) {
+        let head = self.untagged.pop_all();
+        // Safety: &mut self implies that there are no active Hazard Pointers.
+        // So, all objects are safe to reclaim.
+        unsafe { self.reclaim_list_transitive(head) };
+    }
+
+    unsafe fn reclaim_list_transitive(&self, head: *mut Retired) {
+        // TODO: handle children
+        unsafe { self.reclaim_unconditional(head) };
+    }
+
+    /// Equivalent to reclaim_unprotected, but differs in name to clarify that it will remove
+    /// indiscriminately.
+    unsafe fn reclaim_unconditional(&self, head: *mut Retired) {
+        unsafe { self.reclaim_unprotected(head) };
+    }
+
+    fn free_hazptr_recs(&mut self) {
+        // NOTE: folly skips this step for the global domain, but the global domain is never
+        // dropped in the first place, as it is a static. See
+        //
+        //   https://doc.rust-lang.org/reference/items/static-items.html
+
+        let mut node: *mut HazPtrRecord = *self.hazptrs.head.get_mut();
+        while !node.is_null() {
+            // Safety: we have &mut self, so no-one holds any of our hazard pointers any more,
+            // as all holders are tied to 'domain (which must have expired to create the &mut).
+            let mut n: Box<HazPtrRecord> = unsafe { Box::from_raw(node) };
+            debug_assert!(!*n.active.get_mut());
+            node = *n.next.get_mut();
+            drop(n);
+        }
+    }
 }
 
 impl<F> Drop for Domain<F> {
     fn drop(&mut self) {
-        // There should be no hazard pointers active, so all retired objects can be reclaimed.
-        let nretired = *self.retired.count.get_mut();
-        let nreclaimed = self.bulk_reclaim(true);
-        assert_eq!(nretired, nreclaimed as isize);
-        assert!(self.retired.head.get_mut().is_null());
+        self.shutdown = true;
 
-        // Also drop all hazard pointers, as no-one should be holding them any more.
-        let mut node: *mut HazPtrRecord = *self.hazptrs.head.get_mut();
-        while !node.is_null() {
-            // Safety: we're in Drop, so no-one holds any of our hazard pointers any more,
-            // as all holders are tied to 'domain (which must have expired on drop).
-            let mut n: Box<HazPtrRecord> = unsafe { Box::from_raw(node) };
-            assert!(!*n.active.get_mut());
-            node = *n.next.get_mut();
-            drop(n);
-        }
+        self.reclaim_all_objects();
+        self.free_hazptr_recs();
     }
 }
 
@@ -418,7 +399,47 @@ impl Retired {
 
 struct RetiredList {
     head: AtomicPtr<Retired>,
-    count: AtomicIsize,
+}
+
+impl RetiredList {
+    unsafe fn push(&self, sublist_head: *mut Retired, sublist_tail: *mut Retired) {
+        if sublist_head.is_null() {
+            // Pushing an empty list is easy.
+            return;
+        }
+
+        // Stick it at the head of the linked list
+        let head_ptr = &self.head;
+        let mut head = head_ptr.load(Ordering::Acquire);
+        loop {
+            // Safety: we haven't moved anything in Retire, and we own the head, so last_next is
+            // still valid.
+            unsafe { &*sublist_tail }
+                .next
+                .store(head, Ordering::Release);
+            match head_ptr.compare_exchange_weak(
+                head,
+                sublist_head,
+                // NOTE: Folly uses Release, but needs to be both for the load on success.
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => break,
+                Err(head_now) => {
+                    // Head has changed, try again with that as our next ptr.
+                    head = head_now
+                }
+            }
+        }
+    }
+
+    fn pop_all(&self) -> *mut Retired {
+        self.head.swap(std::ptr::null_mut(), Ordering::Acquire)
+    }
+
+    fn is_empty(&self) -> bool {
+        self.head.load(Ordering::Relaxed).is_null()
+    }
 }
 
 /*

@@ -114,3 +114,53 @@ fn feels_bad() {
     // Let's hope this catches the error (at least in debug mode).
     let _ = unsafe { h.protect(&x) }.expect("not null");
 }
+
+#[test]
+fn drop_domain() {
+    let domain = Domain::new(&());
+
+    let drops_42 = Arc::new(AtomicUsize::new(0));
+
+    let x = AtomicPtr::new(Box::into_raw(Box::new(HazPtrObjectWrapper::with_domain(
+        &domain,
+        (42, CountDrops(Arc::clone(&drops_42))),
+    ))));
+
+    // As a reader:
+    let mut h = HazardPointer::make_in_domain(&domain);
+    let my_x = unsafe { h.protect(&x) }.expect("not null");
+    // valid:
+    assert_eq!(my_x.0, 42);
+
+    // As a writer:
+    let drops_9001 = Arc::new(AtomicUsize::new(0));
+    let old = x.swap(
+        Box::into_raw(Box::new(HazPtrObjectWrapper::with_domain(
+            &domain,
+            (9001, CountDrops(Arc::clone(&drops_9001))),
+        ))),
+        std::sync::atomic::Ordering::SeqCst,
+    );
+
+    assert_eq!(drops_42.load(Ordering::SeqCst), 0);
+    assert_eq!(my_x.0, 42);
+
+    unsafe { old.retire(&deleters::drop_box) };
+
+    assert_eq!(drops_42.load(Ordering::SeqCst), 0);
+    assert_eq!(my_x.0, 42);
+
+    let n = domain.eager_reclaim();
+    assert_eq!(n, 0);
+
+    assert_eq!(drops_42.load(Ordering::SeqCst), 0);
+    assert_eq!(my_x.0, 42);
+
+    h.reset_protection();
+    let n = domain.eager_reclaim();
+    assert_eq!(n, 1);
+    assert_eq!(drops_42.load(Ordering::SeqCst), 1);
+
+    drop(h);
+    drop(domain);
+}

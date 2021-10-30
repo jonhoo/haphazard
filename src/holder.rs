@@ -13,43 +13,6 @@ impl HazPtrHolder<'static, crate::Global> {
     }
 }
 
-// This should really be the body of try_protect, and then protect should call try_protect,
-// but that runs into a borrow checker limitation. See:
-//
-//  - https://github.com/rust-lang/rust/issues/51545
-//  - https://github.com/rust-lang/rust/issues/54663
-//  - https://github.com/rust-lang/rust/issues/58910
-//  - https://github.com/rust-lang/rust/issues/84361
-macro_rules! try_protect_actual {
-    ($self:ident, $ptr:ident, $src:ident) => {{
-        $self.hazard.protect($ptr as *mut u8);
-
-        crate::asymmetric_light_barrier();
-
-        let ptr2 = $src.load(Ordering::Acquire);
-        if $ptr != ptr2 {
-            $self.hazard.reset();
-            Err(ptr2)
-        } else {
-            // All good -- protected
-            Ok(std::ptr::NonNull::new($ptr).map(|nn| {
-                // Safety: this is safe because:
-                //
-                //  1. Target of ptr1 will not be deallocated for the returned lifetime since
-                //     our hazard pointer is active and pointing at ptr1.
-                //  2. Pointer address is valid by the safety contract of load.
-                let r = unsafe { nn.as_ref() };
-                debug_assert_eq!(
-                    $self.domain as *const HazPtrDomain<F>,
-                    r.domain() as *const HazPtrDomain<F>,
-                    "object guarded by different domain than holder used to access it"
-                );
-                r
-            }))
-        }
-    }};
-}
-
 impl<'domain, F> HazPtrHolder<'domain, F> {
     pub fn for_domain(domain: &'domain HazPtrDomain<F>) -> Self {
         Self {
@@ -74,8 +37,15 @@ impl<'domain, F> HazPtrHolder<'domain, F> {
         let mut ptr = src.load(Ordering::Relaxed);
         loop {
             // Safety: same safety requirements as try_protect.
-            match try_protect_actual!(self, ptr, src) {
-                Ok(r) => break r,
+            match unsafe { self.try_protect(ptr, src) } {
+                Ok(None) => break None,
+                // Safety:
+                // This is needed to workaround a bug in the borrow checker. See:
+                // - https://github.com/rust-lang/rust/issues/51545
+                // - https://github.com/rust-lang/rust/issues/54663
+                // - https://github.com/rust-lang/rust/issues/58910
+                // - https://github.com/rust-lang/rust/issues/84361
+                Ok(Some(r)) => break Some(unsafe { &*(r as *const _) }),
                 Err(ptr2) => {
                     ptr = ptr2;
                 }
@@ -100,7 +70,31 @@ impl<'domain, F> HazPtrHolder<'domain, F> {
         'o: 'l,
         F: 'static,
     {
-        try_protect_actual!(self, ptr, src)
+        self.hazard.protect(ptr as *mut u8);
+
+        crate::asymmetric_light_barrier();
+
+        let ptr2 = src.load(Ordering::Acquire);
+        if ptr != ptr2 {
+            self.hazard.reset();
+            Err(ptr2)
+        } else {
+            // All good -- protected
+            Ok(std::ptr::NonNull::new(ptr).map(|nn| {
+                // Safety: this is safe because:
+                //
+                //  1. Target of ptr1 will not be deallocated for the returned lifetime since
+                //     our hazard pointer is active and pointing at ptr1.
+                //  2. Pointer address is valid by the safety contract of load.
+                let r = unsafe { nn.as_ref() };
+                debug_assert_eq!(
+                    self.domain as *const HazPtrDomain<F>,
+                    r.domain() as *const HazPtrDomain<F>,
+                    "object guarded by different domain than holder used to access it"
+                );
+                r
+            }))
+        }
     }
 
     pub fn reset(&mut self) {

@@ -2,7 +2,7 @@ use crate::{Deleter, HazPtrRecord, Reclaim};
 use std::collections::HashSet;
 use std::marker::PhantomData;
 use std::sync::atomic::Ordering;
-use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicPtr, AtomicU64, AtomicUsize};
+use std::sync::atomic::{AtomicIsize, AtomicPtr, AtomicU64, AtomicUsize};
 
 const SYNC_TIME_PERIOD: u64 = std::time::Duration::from_nanos(2000000000).as_nanos() as u64;
 const RCOUNT_THRESHOLD: isize = 1000;
@@ -10,6 +10,7 @@ const HCOUNT_MULTIPLIER: isize = 2;
 const NUM_SHARDS: usize = 8;
 const IGNORED_LOW_BITS: u8 = 8;
 const SHARD_MASK: usize = NUM_SHARDS - 1;
+const LOCK_BIT: usize = 1;
 
 #[non_exhaustive]
 pub struct Global;
@@ -52,6 +53,7 @@ impl<F> Domain<F> {
         Self {
             hazptrs: HazPtrRecords {
                 head: AtomicPtr::new(std::ptr::null_mut()),
+                head_available: AtomicUsize::new(0),
                 count: AtomicIsize::new(0),
             },
             untagged: [RETIRED_LIST; NUM_SHARDS],
@@ -64,25 +66,145 @@ impl<F> Domain<F> {
     }
 
     pub(crate) fn acquire(&self) -> &HazPtrRecord {
-        if let Some(hazptr) = self.try_acquire_existing() {
-            hazptr
-        } else {
-            self.acquire_new()
+        self.acquire_many::<1>()[0]
+    }
+
+    pub(crate) fn acquire_many<const N: usize>(&self) -> [&HazPtrRecord; N] {
+        debug_assert!(N >= 1);
+
+        let (mut head, n) = self.try_acquire_available::<N>();
+        assert!(n <= N);
+
+        let mut tail = std::ptr::null();
+        [(); N].map(|_| {
+            if !head.is_null() {
+                // Safety: HazPtrRecords are never deallocated.
+                let rec = unsafe { &*head };
+                head = rec.next.load(Ordering::Relaxed);
+                tail = head;
+                rec
+            } else {
+                let rec = self.acquire_new();
+                rec.available_next.store(tail as *mut _, Ordering::Relaxed);
+                tail = rec as *const _;
+                rec
+            }
+        })
+    }
+
+    pub(crate) fn release(&self, rec: &HazPtrRecord) {
+        assert!(rec.available_next.load(Ordering::Relaxed).is_null());
+        self.push_available(rec, rec);
+    }
+
+    pub(crate) fn release_many<const N: usize>(&self, recs: [&HazPtrRecord; N]) {
+        let head = recs[0];
+        let tail = recs.last().expect("we only give out with N > 0");
+        assert!(tail.available_next.load(Ordering::Relaxed).is_null());
+        self.push_available(head, tail);
+    }
+
+    fn try_acquire_available<const N: usize>(&self) -> (*const HazPtrRecord, usize) {
+        debug_assert!(N >= 1);
+        debug_assert_eq!(std::ptr::null::<HazPtrRecord>() as usize, 0);
+
+        loop {
+            let avail = self.hazptrs.head_available.load(Ordering::Acquire);
+            if avail == std::ptr::null::<HazPtrRecord>() as usize {
+                return (std::ptr::null_mut(), 0);
+            }
+            debug_assert_ne!(avail, std::ptr::null::<HazPtrRecord>() as usize | LOCK_BIT);
+            if (avail as usize & LOCK_BIT) == 0 {
+                // Definitely a valid pointer now.
+                let avail: *const HazPtrRecord = avail as _;
+
+                // The available list is not currently locked.
+                //
+                // XXX: This could be a fetch_or and allow progress even if there's a new (but
+                // unlocked) head.
+                if self
+                    .hazptrs
+                    .head_available
+                    .compare_exchange_weak(
+                        avail as usize,
+                        avail as usize | LOCK_BIT,
+                        Ordering::AcqRel,
+                        Ordering::Relaxed,
+                    )
+                    .is_ok()
+                {
+                    // Safety: We hold the lock on the available list.
+                    let (rec, n) = unsafe { self.try_acquire_available_locked::<N>(avail) };
+                    debug_assert!(n >= 1, "head_available was not null");
+                    debug_assert!(n <= N);
+                    return (rec, n);
+                } else {
+                    std::thread::yield_now();
+                }
+            }
         }
     }
 
-    fn try_acquire_existing(&self) -> Option<&HazPtrRecord> {
-        let head_ptr = &self.hazptrs.head;
-        let mut node = head_ptr.load(Ordering::Acquire);
-        while !node.is_null() {
-            // Safety: HazPtrRecords are never de-allocated while the domain lives.
-            let n = unsafe { &*node };
-            if n.try_acquire() {
-                return Some(n);
-            }
-            node = n.next.load(Ordering::Relaxed);
+    /// # Safety
+    ///
+    /// Must already hold the lock on the available list
+    unsafe fn try_acquire_available_locked<const N: usize>(
+        &self,
+        head: *const HazPtrRecord,
+    ) -> (*const HazPtrRecord, usize) {
+        debug_assert!(N >= 1);
+        debug_assert!(!head.is_null());
+
+        let mut tail = head;
+        let mut n = 1;
+        let mut next = unsafe { &*tail }.available_next.load(Ordering::Relaxed);
+
+        while !next.is_null() && n < N {
+            debug_assert_eq!((next as usize) & LOCK_BIT, 0);
+            tail = next;
+            next = unsafe { &*tail }.available_next.load(Ordering::Relaxed);
+            n += 1;
         }
-        None
+
+        // NOTE: This releases the lock
+        self.hazptrs
+            .head_available
+            .store(next as usize, Ordering::Release);
+        unsafe { &*tail }
+            .available_next
+            .store(std::ptr::null_mut(), Ordering::Relaxed);
+
+        (head, n)
+    }
+
+    fn push_available(&self, head: &HazPtrRecord, tail: &HazPtrRecord) {
+        debug_assert!(tail.available_next.load(Ordering::Relaxed).is_null());
+        if cfg!(debug_assertions) {
+            // XXX: check that head and tail are connected
+        }
+        debug_assert_eq!(head as *const _ as usize & LOCK_BIT, 0);
+        loop {
+            let avail = self.hazptrs.head_available.load(Ordering::Acquire);
+            if (avail & LOCK_BIT) == 0 {
+                tail.available_next
+                    .store(avail as *mut _, Ordering::Relaxed);
+                if self
+                    .hazptrs
+                    .head_available
+                    .compare_exchange_weak(
+                        avail,
+                        head as *const _ as usize,
+                        Ordering::AcqRel,
+                        Ordering::Relaxed,
+                    )
+                    .is_ok()
+                {
+                    break;
+                }
+            } else {
+                std::thread::yield_now();
+            }
+        }
     }
 
     pub(crate) fn acquire_new(&self) -> &HazPtrRecord {
@@ -90,7 +212,7 @@ impl<F> Domain<F> {
         let hazptr = Box::into_raw(Box::new(HazPtrRecord {
             ptr: AtomicPtr::new(std::ptr::null_mut()),
             next: AtomicPtr::new(std::ptr::null_mut()),
-            active: AtomicBool::new(true),
+            available_next: AtomicPtr::new(std::ptr::null_mut()),
         }));
         // And stick it at the head of the linked list
         let mut head = self.hazptrs.head.load(Ordering::Acquire);
@@ -226,10 +348,7 @@ impl<F> Domain<F> {
                 while !node.is_null() {
                     // Safety: HazPtrRecords are never de-allocated while the domain lives.
                     let n = unsafe { &*node };
-                    // NOTE: Folly doesn't skip active here, but that seems wrong?
-                    if n.active.load(Ordering::SeqCst) {
-                        guarded_ptrs.insert(n.ptr.load(Ordering::Acquire));
-                    }
+                    guarded_ptrs.insert(n.ptr.load(Ordering::Acquire));
                     node = n.next.load(Ordering::Relaxed);
                 }
 
@@ -348,10 +467,6 @@ impl<F> Domain<F> {
         self.do_reclamation(rcount)
     }
 
-    pub(crate) fn release(&self, hazard: &HazPtrRecord) {
-        hazard.release();
-    }
-
     fn reclaim_all_objects(&mut self) {
         for i in 0..NUM_SHARDS {
             let head = self.untagged[i].pop_all();
@@ -383,7 +498,6 @@ impl<F> Domain<F> {
             // Safety: we have &mut self, so no-one holds any of our hazard pointers any more,
             // as all holders are tied to 'domain (which must have expired to create the &mut).
             let mut n: Box<HazPtrRecord> = unsafe { Box::from_raw(node) };
-            debug_assert!(!*n.active.get_mut());
             node = *n.next.get_mut();
             drop(n);
         }
@@ -405,6 +519,7 @@ impl<F> Drop for Domain<F> {
 
 struct HazPtrRecords {
     head: AtomicPtr<HazPtrRecord>,
+    head_available: AtomicUsize, // really *mut HazPtrRecord
     count: AtomicIsize,
 }
 

@@ -1,8 +1,8 @@
+use crate::sync::atomic::{AtomicIsize, AtomicPtr, AtomicU64, AtomicUsize};
 use crate::{Deleter, HazPtrRecord, Reclaim};
 use std::collections::HashSet;
 use std::marker::PhantomData;
 use std::sync::atomic::Ordering;
-use std::sync::atomic::{AtomicIsize, AtomicPtr, AtomicU64, AtomicUsize};
 
 const SYNC_TIME_PERIOD: u64 = std::time::Duration::from_nanos(2000000000).as_nanos() as u64;
 const RCOUNT_THRESHOLD: isize = 1000;
@@ -20,7 +20,24 @@ impl Global {
     }
 }
 
+#[cfg(not(loom))]
 static SHARED_DOMAIN: Domain<Global> = Domain::new(&Global::new());
+
+#[cfg(loom)]
+loom::lazy_static! {
+    static ref SHARED_DOMAIN: Domain<Global> = Domain::new(&Global::new());
+    static ref SHARD: loom::sync::atomic::AtomicUsize = loom::sync::atomic::AtomicUsize::new(0);
+}
+
+// Make AtomicPtr usable with loom API.
+trait WithMut<T> {
+    fn with_mut<R>(&mut self, f: impl FnOnce(&mut *mut T) -> R) -> R;
+}
+impl<T> WithMut<T> for std::sync::atomic::AtomicPtr<T> {
+    fn with_mut<R>(&mut self, f: impl FnOnce(&mut *mut T) -> R) -> R {
+        f(self.get_mut())
+    }
+}
 
 // Holds linked list of HazPtrRecords
 pub struct Domain<F> {
@@ -46,24 +63,42 @@ macro_rules! unique_domain {
     };
 }
 
-impl<F> Domain<F> {
-    pub const fn new(_: &F) -> Self {
-        // https://blog.rust-lang.org/2021/02/11/Rust-1.50.0.html#const-value-repetition-for-arrays
-        const RETIRED_LIST: RetiredList = RetiredList::new();
-        Self {
-            hazptrs: HazPtrRecords {
-                head: AtomicPtr::new(std::ptr::null_mut()),
-                head_available: AtomicUsize::new(0),
+// Macro to make new const only when not in loom.
+macro_rules! new {
+    ($($decl:tt)*) => {
+        pub $($decl)*(_: &F) -> Self {
+            // https://blog.rust-lang.org/2021/02/11/Rust-1.50.0.html#const-value-repetition-for-arrays
+            #[cfg(not(loom))]
+            let untagged = {
+                const RETIRED_LIST: RetiredList = RetiredList::new();
+                [RETIRED_LIST; NUM_SHARDS]
+            };
+            #[cfg(loom)]
+            let untagged = {
+                [(); NUM_SHARDS].map(|_| RetiredList::new())
+            };
+            Self {
+                hazptrs: HazPtrRecords {
+                    head: AtomicPtr::new(std::ptr::null_mut()),
+                    head_available: AtomicUsize::new(0),
+                    count: AtomicIsize::new(0),
+                },
+                untagged,
                 count: AtomicIsize::new(0),
-            },
-            untagged: [RETIRED_LIST; NUM_SHARDS],
-            count: AtomicIsize::new(0),
-            due_time: AtomicU64::new(0),
-            nbulk_reclaims: AtomicUsize::new(0),
-            family: PhantomData,
-            shutdown: false,
+                due_time: AtomicU64::new(0),
+                nbulk_reclaims: AtomicUsize::new(0),
+                family: PhantomData,
+                shutdown: false,
+            }
         }
-    }
+    };
+}
+
+impl<F> Domain<F> {
+    #[cfg(not(loom))]
+    new!(const fn new);
+    #[cfg(loom)]
+    new!(fn new);
 
     pub(crate) fn acquire(&self) -> &HazPtrRecord {
         self.acquire_many::<1>()[0]
@@ -139,7 +174,7 @@ impl<F> Domain<F> {
                     debug_assert!(n <= N);
                     return (rec, n);
                 } else {
-                    std::thread::yield_now();
+                    crate::sync::yield_now();
                 }
             }
         }
@@ -202,7 +237,7 @@ impl<F> Domain<F> {
                     break;
                 }
             } else {
-                std::thread::yield_now();
+                crate::sync::yield_now();
             }
         }
     }
@@ -218,7 +253,7 @@ impl<F> Domain<F> {
         let mut head = self.hazptrs.head.load(Ordering::Acquire);
         loop {
             // Safety: hazptr was never shared, so &mut is ok.
-            *unsafe { &mut *hazptr }.next.get_mut() = head;
+            unsafe { &mut *hazptr }.next.with_mut(|p| *p = head);
             match self.hazptrs.head.compare_exchange_weak(
                 head,
                 hazptr,
@@ -248,18 +283,18 @@ impl<F> Domain<F> {
         &'domain self,
         ptr: *mut (dyn Reclaim + 'domain),
         deleter: &'static dyn Deleter,
-    ) {
+    ) -> usize {
         // First, stick ptr onto the list of retired objects.
         //
         // Safety: ptr will not be accessed after Domain is dropped, which is when 'domain ends.
         let retired = Box::new(unsafe { Retired::new(self, ptr, deleter) });
 
-        self.push_list(retired);
+        self.push_list(retired)
     }
 
-    fn push_list(&self, mut retired: Box<Retired>) {
+    fn push_list(&self, mut retired: Box<Retired>) -> usize {
         assert!(
-            retired.next.get_mut().is_null(),
+            retired.next.with_mut(|p| p.is_null()),
             "only single item retiring is supported atm"
         );
 
@@ -269,7 +304,7 @@ impl<F> Domain<F> {
         unsafe { self.untagged[Self::calc_shard(retired)].push(retired, retired) };
         self.count.fetch_add(1, Ordering::Release);
 
-        self.check_threshold_and_reclaim();
+        self.check_threshold_and_reclaim()
     }
 
     fn threshold(&self) -> isize {
@@ -312,17 +347,17 @@ impl<F> Domain<F> {
         self.count.swap(0, Ordering::AcqRel)
     }
 
-    fn check_threshold_and_reclaim(&self) {
+    fn check_threshold_and_reclaim(&self) -> usize {
         let mut rcount = self.check_count_threshold();
         if rcount == 0 {
             rcount = self.check_due_time();
             if rcount == 0 {
-                return;
+                return 0;
             }
         }
 
         self.nbulk_reclaims.fetch_add(1, Ordering::Acquire);
-        self.do_reclamation(rcount);
+        self.do_reclamation(rcount)
     }
 
     fn do_reclamation(&self, mut rcount: isize) -> usize {
@@ -450,6 +485,12 @@ impl<F> Domain<F> {
         }
     }
 
+    #[cfg(loom)]
+    fn now() -> u64 {
+        0
+    }
+
+    #[cfg(not(loom))]
     fn now() -> u64 {
         use std::convert::TryFrom;
         u64::try_from(
@@ -463,8 +504,12 @@ impl<F> Domain<F> {
 
     pub fn eager_reclaim(&self) -> usize {
         let rcount = self.count.swap(0, Ordering::AcqRel);
-        self.nbulk_reclaims.fetch_add(1, Ordering::Acquire);
-        self.do_reclamation(rcount)
+        if rcount != 0 {
+            self.nbulk_reclaims.fetch_add(1, Ordering::Acquire);
+            self.do_reclamation(rcount)
+        } else {
+            0
+        }
     }
 
     fn reclaim_all_objects(&mut self) {
@@ -493,18 +538,24 @@ impl<F> Domain<F> {
         //
         //   https://doc.rust-lang.org/reference/items/static-items.html
 
-        let mut node: *mut HazPtrRecord = *self.hazptrs.head.get_mut();
+        let mut node: *mut HazPtrRecord = self.hazptrs.head.with_mut(|p| *p);
         while !node.is_null() {
             // Safety: we have &mut self, so no-one holds any of our hazard pointers any more,
             // as all holders are tied to 'domain (which must have expired to create the &mut).
             let mut n: Box<HazPtrRecord> = unsafe { Box::from_raw(node) };
-            node = *n.next.get_mut();
+            node = n.next.with_mut(|p| *p);
             drop(n);
         }
     }
 
+    #[cfg(not(loom))]
     fn calc_shard(input: *mut Retired) -> usize {
         (input as usize >> IGNORED_LOW_BITS) & SHARD_MASK
+    }
+
+    #[cfg(loom)]
+    fn calc_shard(_input: *mut Retired) -> usize {
+        SHARD.fetch_add(1, Ordering::Relaxed) & SHARD_MASK
     }
 }
 
@@ -552,7 +603,15 @@ struct RetiredList {
 }
 
 impl RetiredList {
+    // Macro to make new const only when not in loom.
+    #[cfg(not(loom))]
     const fn new() -> Self {
+        Self {
+            head: AtomicPtr::new(std::ptr::null_mut()),
+        }
+    }
+    #[cfg(loom)]
+    fn new() -> Self {
         Self {
             head: AtomicPtr::new(std::ptr::null_mut()),
         }

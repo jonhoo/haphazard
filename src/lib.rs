@@ -7,11 +7,12 @@ mod domain;
 mod holder;
 mod object;
 mod record;
+mod sync;
 
 fn asymmetric_light_barrier() {
     // TODO: if cfg!(linux) {
     // https://github.com/facebook/folly/blob/bd600cd4e88f664f285489c76b6ad835d8367cd2/folly/portability/Asm.h#L28
-    std::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst);
+    crate::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst);
 }
 
 enum HeavyBarrierKind {
@@ -21,7 +22,7 @@ enum HeavyBarrierKind {
 fn asymmetric_heavy_barrier(_: HeavyBarrierKind) {
     // TODO: if cfg!(linux) {
     // https://github.com/facebook/folly/blob/bd600cd4e88f664f285489c76b6ad835d8367cd2/folly/synchronization/AsymmetricMemoryBarrier.cpp#L84
-    std::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst);
+    crate::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst);
 }
 
 pub use domain::Global;

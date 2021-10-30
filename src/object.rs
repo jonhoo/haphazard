@@ -16,11 +16,9 @@ where
     ///
     /// It is okay for existing readers to still refer to Self.
     ///   
-    unsafe fn retire(self: *mut Self, deleter: &'static dyn Deleter) {
+    unsafe fn retire(self: *mut Self, deleter: &'static dyn Deleter) -> usize {
         let ptr = self as *mut (dyn Reclaim + 'domain);
-        unsafe {
-            (&*self).domain().retire(ptr, deleter);
-        }
+        unsafe { (&*self).domain().retire(ptr, deleter) }
     }
 }
 

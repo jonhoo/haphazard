@@ -1,5 +1,5 @@
+use crate::sync::atomic::AtomicPtr;
 use crate::{Domain, HazPtrObject, HazPtrRecord};
-use std::sync::atomic::AtomicPtr;
 use std::sync::atomic::Ordering;
 
 pub struct HazardPointer<'domain, F> {

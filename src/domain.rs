@@ -115,12 +115,16 @@ impl<F> Domain<F> {
             if !head.is_null() {
                 // Safety: HazPtrRecords are never deallocated.
                 let rec = unsafe { &*head };
-                head = rec.next.load(Ordering::Relaxed);
+                head = rec.available_next.load(Ordering::Relaxed);
                 tail = head;
                 rec
             } else {
                 let rec = self.acquire_new();
-                rec.available_next.store(tail as *mut _, Ordering::Relaxed);
+                if !tail.is_null() {
+                    unsafe { &*tail }
+                        .available_next
+                        .store(rec as *const _ as *mut _, Ordering::Relaxed);
+                }
                 tail = rec as *const _;
                 rec
             }

@@ -24,6 +24,64 @@ impl Drop for CountDrops {
 }
 
 #[test]
+fn acquires_multiple() {
+    loom::model(|| {
+        let drops_1 = CountDrops::new();
+        let ndrops_1 = drops_1.counter();
+        let drops_2 = CountDrops::new();
+        let ndrops_2 = drops_2.counter();
+
+        let domain = Domain::global();
+
+        let x = Arc::new(AtomicPtr::new(Box::into_raw(Box::new(
+            HazPtrObjectWrapper::with_domain(&domain, (1, drops_1)),
+        ))));
+        let y = Arc::new(AtomicPtr::new(Box::into_raw(Box::new(
+            HazPtrObjectWrapper::with_domain(&domain, (2, drops_2)),
+        ))));
+
+        let (tx, rx) = loom::sync::mpsc::channel();
+        let x1 = Arc::clone(&x);
+        let y1 = Arc::clone(&y);
+        let t1 = thread::spawn(move || {
+            let mut hazptr_array = HazardPointer::make_many_in_domain(&domain);
+
+            let [my_x, my_y] = unsafe { hazptr_array.protect([&x1, &y1]) };
+
+            let my_x = my_x.expect("not null");
+            let my_y = my_y.expect("not null");
+
+            tx.send(()).unwrap();
+
+            assert_eq!(my_x.0, 1);
+            assert_eq!(my_y.0, 2);
+        });
+
+        let _ = rx.recv();
+
+        domain.eager_reclaim();
+        assert_eq!(ndrops_1.load(Ordering::SeqCst), 0);
+        assert_eq!(ndrops_2.load(Ordering::SeqCst), 0);
+
+        t1.join().unwrap();
+
+        domain.eager_reclaim();
+        assert_eq!(ndrops_1.load(Ordering::SeqCst), 0);
+        assert_eq!(ndrops_2.load(Ordering::SeqCst), 0);
+
+        unsafe { x.load(Ordering::SeqCst).retire(&deleters::drop_box) };
+        domain.eager_reclaim();
+        assert_eq!(ndrops_1.load(Ordering::SeqCst), 1);
+        assert_eq!(ndrops_2.load(Ordering::SeqCst), 0);
+
+        unsafe { y.load(Ordering::SeqCst).retire(&deleters::drop_box) };
+        domain.eager_reclaim();
+        assert_eq!(ndrops_1.load(Ordering::SeqCst), 1);
+        assert_eq!(ndrops_2.load(Ordering::SeqCst), 1);
+    })
+}
+
+#[test]
 fn single_reader_protection() {
     loom::model(|| {
         let drops_42 = CountDrops::new();

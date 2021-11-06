@@ -27,8 +27,7 @@ fn acquires_multiple() {
     ))));
 
     // As a reader:
-    // let hazptrs = HazardPointer::make_many_global::<2>();
-    let mut hazptr_array = HazardPointer::make_many_in_domain::<2>(&domain);
+    let mut hazptr_array = HazardPointer::make_many_in_domain(&domain);
 
     // Safety:
     //
@@ -56,8 +55,6 @@ fn acquires_multiple() {
     assert_eq!(my_x.0, 42);
     assert_eq!(my_y.0, 42);
 
-    // valid:
-    assert_eq!(my_y.0, 42);
     drop(hazptr_array);
     // invalid:
     // let _: i32 = my_y.0;

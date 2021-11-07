@@ -113,18 +113,14 @@ impl<F> Domain<F> {
         let mut tail = std::ptr::null();
         [(); N].map(|_| {
             if !head.is_null() {
+                tail = head;
                 // Safety: HazPtrRecords are never deallocated.
                 let rec = unsafe { &*head };
                 head = rec.available_next.load(Ordering::Relaxed);
-                tail = head;
                 rec
             } else {
                 let rec = self.acquire_new();
-                if !tail.is_null() {
-                    unsafe { &*tail }
-                        .available_next
-                        .store(rec as *const _ as *mut _, Ordering::Relaxed);
-                }
+                rec.available_next.store(tail as *mut _, Ordering::Relaxed);
                 tail = rec as *const _;
                 rec
             }
@@ -137,8 +133,8 @@ impl<F> Domain<F> {
     }
 
     pub(crate) fn release_many<const N: usize>(&self, recs: [&HazPtrRecord; N]) {
-        let head = recs[0];
-        let tail = recs.last().expect("we only give out with N > 0");
+        let tail = recs[0];
+        let head = recs.last().expect("we only give out with N > 0");
         assert!(tail.available_next.load(Ordering::Relaxed).is_null());
         self.push_available(head, tail);
     }
@@ -726,3 +722,37 @@ struct CannotConfuseGlobalReader;
 /// ```
 #[cfg(doctest)]
 struct CannotConfuseAcrossFamilies;
+
+#[cfg(test)]
+mod tests {
+    use super::Domain;
+    use std::sync::atomic::Ordering;
+
+    #[test]
+    fn acquire_many_skips_used() {
+        let domain = Domain::new(&());
+        let rec1 = domain.acquire();
+        let rec2 = domain.acquire();
+
+        assert_eq!(
+            rec2.next.load(Ordering::Relaxed),
+            rec1 as *const _ as *mut _
+        );
+        domain.release(rec2);
+        drop(rec2);
+
+        let [one, two] = domain.acquire_many();
+
+        assert_eq!(
+            two.available_next.load(Ordering::Relaxed),
+            one as *const _ as *mut _
+        );
+
+        assert_eq!(
+            one.available_next.load(Ordering::Relaxed),
+            std::ptr::null_mut(),
+        );
+
+        assert_eq!(one.next.load(Ordering::Relaxed), rec1 as *const _ as *mut _);
+    }
+}

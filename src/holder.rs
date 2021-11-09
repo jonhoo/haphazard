@@ -1,6 +1,5 @@
-use crate::sync::atomic::AtomicPtr;
+use crate::sync::atomic::{AtomicPtr, Ordering};
 use crate::{Domain, HazPtrObject, HazPtrRecord};
-use std::sync::atomic::Ordering;
 
 pub struct HazardPointer<'domain, F> {
     hazard: &'domain HazPtrRecord,
@@ -80,7 +79,7 @@ impl<'domain, F> HazardPointer<'domain, F> {
             Err(ptr2)
         } else {
             // All good -- protected
-            Ok(std::ptr::NonNull::new(ptr).map(|nn| {
+            Ok(crate::ptr::NonNull::new(ptr).map(|nn| {
                 // Safety: this is safe because:
                 //
                 //  1. Target of ptr1 will not be deallocated for the returned lifetime since

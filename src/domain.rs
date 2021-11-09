@@ -558,9 +558,9 @@ impl<F> Domain<F> {
         }
     }
 
-    #[cfg(not(loom))]
+    #[cfg(all(not(loom), feature = "multiply_hash"))]
     fn calc_shard(&self, input: *mut Retired) -> usize {
-        //XXX: This is not prime when truncated to 32 bits
+        //XXX: This is not prime if a usize 32 bits
         const LARGE_PRIME: usize = 4445950232728569541;
         let input = input as usize ^ self.shard_hash_state.load(Ordering::Relaxed);
 
@@ -574,6 +574,11 @@ impl<F> Domain<F> {
 
         self.shard_hash_state.store(u64::from_ne_bytes(new_state) as usize, Ordering::Relaxed);
         u64::from_ne_bytes(hash) as usize & SHARD_MASK
+    }
+
+    #[cfg(all(not(loom), not(feature = "multiply_hash")))]
+    fn calc_shard(&self, input: *mut Retired) -> usize {
+        (input as usize >> IGNORED_LOW_BITS) & SHARD_MASK
     }
 
     #[cfg(loom)]

@@ -5,7 +5,7 @@ edition = "2018"
 
 [features]
 std = []
-mutiply_hash = []
+multiply_hash= []
 
 default = ["std"]
 

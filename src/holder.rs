@@ -1,6 +1,31 @@
 use crate::sync::atomic::AtomicPtr;
 use crate::{Domain, HazPtrObject, HazPtrRecord};
+use std::marker::PhantomData;
 use std::sync::atomic::Ordering;
+
+pub struct HazardPointerToken<'array, 'domain, F> {
+    record: &'domain HazPtrRecord,
+    domain: &'domain Domain<F>,
+    _array: PhantomData<&'array ()>,
+}
+
+impl<'array, 'domain, F> HazardPointerToken<'array, 'domain, F> {
+    ///
+    /// # Safety
+    ///
+    /// Caller must guarantee that the address in `AtomicPtr` is valid as a reference, or null.
+    /// Caller must also guarantee that the value behind the `AtomicPtr` will only be deallocated
+    /// through calls to [`HazPtrObject::retire`] on the same [`Domain`] as this holder is
+    /// associated with.
+    pub unsafe fn protect<'l, 'o, T>(&'l mut self, src: &'_ AtomicPtr<T>) -> Option<&'l T>
+    where
+        T: HazPtrObject<'o, F>,
+        'o: 'l,
+        F: 'static,
+    {
+        unsafe { protect(&self.domain, &self.record, src) }
+    }
+}
 
 pub struct HazardPointerArray<'domain, F, const N: usize> {
     domain: &'domain Domain<F>,
@@ -8,6 +33,21 @@ pub struct HazardPointerArray<'domain, F, const N: usize> {
 }
 
 impl<'domain, F, const N: usize> HazardPointerArray<'domain, F, N> {
+    pub fn protectors<'array>(&'array mut self) -> [HazardPointerToken<'array, 'domain, F>; N] {
+        self.records.map(|record| HazardPointerToken {
+            record,
+            domain: self.domain,
+            _array: PhantomData,
+        })
+    }
+
+    ///
+    /// # Safety
+    ///
+    /// Caller must guarantee that the address in `AtomicPtr` is valid as a reference, or null.
+    /// Caller must also guarantee that the value behind the `AtomicPtr` will only be deallocated
+    /// through calls to [`HazPtrObject::retire`] on the same [`Domain`] as this holder is
+    /// associated with.
     pub unsafe fn protect<'l, 'o, T>(
         &'l mut self,
         mut sources: [&'_ AtomicPtr<T>; N],

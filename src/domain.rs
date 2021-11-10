@@ -120,6 +120,7 @@ impl<F> Domain<F> {
                 rec
             } else {
                 let rec = self.acquire_new();
+                // Make sure we also link in the newly allocated nodes.
                 if !tail.is_null() {
                     unsafe { &*tail }
                         .available_next

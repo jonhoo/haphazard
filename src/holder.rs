@@ -4,7 +4,7 @@ use std::sync::atomic::Ordering;
 
 pub struct HazardPointerArray<'domain, F, const N: usize> {
     domain: &'domain Domain<F>,
-    records: Option<[&'domain HazPtrRecord; N]>,
+    records: [&'domain HazPtrRecord; N],
 }
 
 impl<'domain, F, const N: usize> HazardPointerArray<'domain, F, N> {
@@ -19,14 +19,7 @@ impl<'domain, F, const N: usize> HazardPointerArray<'domain, F, N> {
     {
         let mut out = [None; N];
 
-        for (i, (hazptr, src)) in self
-            .records
-            .as_mut()
-            .expect("pointers exist")
-            .iter_mut()
-            .zip(&mut sources)
-            .enumerate()
-        {
+        for (i, (hazptr, src)) in self.records.iter_mut().zip(&mut sources).enumerate() {
             out[i] = unsafe { protect(&self.domain, hazptr, src) };
         }
 
@@ -34,7 +27,7 @@ impl<'domain, F, const N: usize> HazardPointerArray<'domain, F, N> {
     }
 
     pub fn reset_protection(&mut self) {
-        for hazptr in self.records.as_mut().expect("pointers exist") {
+        for hazptr in self.records {
             hazptr.reset();
         }
     }
@@ -43,8 +36,7 @@ impl<'domain, F, const N: usize> HazardPointerArray<'domain, F, N> {
 impl<F, const N: usize> Drop for HazardPointerArray<'_, F, N> {
     fn drop(&mut self) {
         self.reset_protection();
-        let records = self.records.take().expect("pointers exist");
-        self.domain.release_many(records);
+        self.domain.release_many(self.records);
     }
 }
 
@@ -76,10 +68,7 @@ impl<'domain, F> HazardPointer<'domain, F> {
     ) -> HazardPointerArray<'domain, F, N> {
         let records = domain.acquire_many::<N>();
 
-        HazardPointerArray {
-            domain,
-            records: Some(records),
-        }
+        HazardPointerArray { domain, records }
     }
 
     ///

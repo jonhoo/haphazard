@@ -1,15 +1,4 @@
 use crate::sync::atomic::{AtomicIsize, AtomicPtr, AtomicU64, AtomicUsize, Ordering};
-<<<<<<< HEAD
-use crate::{boxed::Box, marker::PhantomData};
-use crate::{Deleter, HazPtrRecord, Reclaim};
-
-#[cfg(not(feature = "std"))]
-use alloc::collections::BTreeSet as Set;
-#[cfg(feature = "std")]
-use std::collections::HashSet as Set;
-
-const SYNC_TIME_PERIOD: u64 = 2000000000; //Units in nanoseconds
-=======
 use crate::{marker::PhantomData, boxed::Box};
 use crate::{Deleter, HazPtrRecord, Reclaim};
 
@@ -18,8 +7,9 @@ use std::collections::HashSet as Set;
 #[cfg(not(feature = "std"))]
 use alloc::collections::BTreeSet as Set;
 
-const SYNC_TIME_PERIOD: u64 = 2000000000;//Units in nanoseconds
->>>>>>> main
+#[cfg(feature = "std")]
+const SYNC_TIME_PERIOD: u64 = std::time::Duration::from_nanos(2000000000).as_nanos() as u64;
+
 const RCOUNT_THRESHOLD: isize = 1000;
 const HCOUNT_MULTIPLIER: isize = 2;
 const NUM_SHARDS: usize = 8;
@@ -165,14 +155,7 @@ impl<F> Domain<F> {
             if avail == crate::ptr::null::<HazPtrRecord>() as usize {
                 return (crate::ptr::null_mut(), 0);
             }
-<<<<<<< HEAD
-            debug_assert_ne!(
-                avail,
-                crate::ptr::null::<HazPtrRecord>() as usize | LOCK_BIT
-            );
-=======
             debug_assert_ne!(avail, crate::ptr::null::<HazPtrRecord>() as usize | LOCK_BIT);
->>>>>>> main
             if (avail as usize & LOCK_BIT) == 0 {
                 // Definitely a valid pointer now.
                 let avail: *const HazPtrRecord = avail as _;

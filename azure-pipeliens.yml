@@ -1,0 +1,17 @@
+jobs:
+ - template: default.yml@templates
+   parameters:
+     minrust: 1.56.0
+     nightly: true
+ - template: coverage.yml@templates
+   parameters:
+     token: $(CODECOV_TOKEN_SECRET)
+     nightly: true
+
+resources:
+  repositories:
+    - repository: templates
+      type: github
+      name: crate-ci/azure-pipelines
+      ref: refs/heads/v0.4
+      endpoint: jonhoo

@@ -1,4 +1,5 @@
 use crate::sync::atomic::{AtomicIsize, AtomicPtr, AtomicU64, AtomicUsize, Ordering};
+<<<<<<< HEAD
 use crate::{boxed::Box, marker::PhantomData};
 use crate::{Deleter, HazPtrRecord, Reclaim};
 
@@ -8,6 +9,17 @@ use alloc::collections::BTreeSet as Set;
 use std::collections::HashSet as Set;
 
 const SYNC_TIME_PERIOD: u64 = 2000000000; //Units in nanoseconds
+=======
+use crate::{marker::PhantomData, boxed::Box};
+use crate::{Deleter, HazPtrRecord, Reclaim};
+
+#[cfg(feature = "std")]
+use std::collections::HashSet as Set;
+#[cfg(not(feature = "std"))]
+use alloc::collections::BTreeSet as Set;
+
+const SYNC_TIME_PERIOD: u64 = 2000000000;//Units in nanoseconds
+>>>>>>> main
 const RCOUNT_THRESHOLD: isize = 1000;
 const HCOUNT_MULTIPLIER: isize = 2;
 const NUM_SHARDS: usize = 8;
@@ -51,6 +63,7 @@ pub struct Domain<F> {
     nbulk_reclaims: AtomicUsize,
     count: AtomicIsize,
     shutdown: bool,
+    shard_hash_state: AtomicUsize,
 }
 
 impl Domain<Global> {
@@ -92,6 +105,7 @@ macro_rules! new {
                 nbulk_reclaims: AtomicUsize::new(0),
                 family: PhantomData,
                 shutdown: false,
+                shard_hash_state: AtomicUsize::new(0),
             }
         }
     };
@@ -151,10 +165,14 @@ impl<F> Domain<F> {
             if avail == crate::ptr::null::<HazPtrRecord>() as usize {
                 return (crate::ptr::null_mut(), 0);
             }
+<<<<<<< HEAD
             debug_assert_ne!(
                 avail,
                 crate::ptr::null::<HazPtrRecord>() as usize | LOCK_BIT
             );
+=======
+            debug_assert_ne!(avail, crate::ptr::null::<HazPtrRecord>() as usize | LOCK_BIT);
+>>>>>>> main
             if (avail as usize & LOCK_BIT) == 0 {
                 // Definitely a valid pointer now.
                 let avail: *const HazPtrRecord = avail as _;
@@ -307,7 +325,7 @@ impl<F> Domain<F> {
         crate::asymmetric_light_barrier();
 
         let retired = Box::into_raw(retired);
-        unsafe { self.untagged[Self::calc_shard(retired)].push(retired, retired) };
+        unsafe { self.untagged[self.calc_shard(retired)].push(retired, retired) };
         self.count.fetch_add(1, Ordering::Release);
 
         #[cfg(not(feature = "std"))]
@@ -523,6 +541,11 @@ impl<F> Domain<F> {
         .expect("system time is too far into the future")
     } 
 
+    #[cfg(not(feature = "std"))]
+    fn now() -> u64 {
+        unimplemented!()
+    }
+
     pub fn eager_reclaim(&self) -> usize {
         let rcount = self.count.swap(0, Ordering::AcqRel);
         if rcount != 0 {
@@ -569,13 +592,31 @@ impl<F> Domain<F> {
         }
     }
 
-    #[cfg(not(loom))]
-    fn calc_shard(input: *mut Retired) -> usize {
+    #[cfg(all(not(loom), feature = "multiply_hash"))]
+    fn calc_shard(&self, input: *mut Retired) -> usize {
+        //XXX: This is not prime if a usize 32 bits
+        const LARGE_PRIME: usize = 4445950232728569541;
+        let input = input as usize ^ self.shard_hash_state.load(Ordering::Relaxed);
+
+        //XXX: Could be made simpler without the slice stuff using mem::transmute
+        let mul_result = (input as u128 * LARGE_PRIME as u128).to_ne_bytes();
+        let mut hash = [0u8; 8];
+        hash.copy_from_slice(&mul_result[0..8]);
+
+        let mut new_state = [0u8; 8];
+        new_state.copy_from_slice(&mul_result[8..16]);
+
+        self.shard_hash_state.store(u64::from_ne_bytes(new_state) as usize, Ordering::Relaxed);
+        u64::from_ne_bytes(hash) as usize & SHARD_MASK
+    }
+
+    #[cfg(all(not(loom), not(feature = "multiply_hash")))]
+    fn calc_shard(&self, input: *mut Retired) -> usize {
         (input as usize >> IGNORED_LOW_BITS) & SHARD_MASK
     }
 
     #[cfg(loom)]
-    fn calc_shard(_input: *mut Retired) -> usize {
+    fn calc_shard(&self, _input: *mut Retired) -> usize {
         SHARD.fetch_add(1, Ordering::Relaxed) & SHARD_MASK
     }
 }

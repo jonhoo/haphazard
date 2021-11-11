@@ -1,13 +1,13 @@
 use crate::sync::atomic::{AtomicIsize, AtomicPtr, AtomicU64, AtomicUsize, Ordering};
-use crate::{marker::PhantomData, boxed::Box};
+use crate::{boxed::Box, marker::PhantomData};
 use crate::{Deleter, HazPtrRecord, Reclaim};
 
-#[cfg(feature = "std")]
-use std::collections::HashSet as Set;
 #[cfg(not(feature = "std"))]
 use alloc::collections::BTreeSet as Set;
+#[cfg(feature = "std")]
+use std::collections::HashSet as Set;
 
-const SYNC_TIME_PERIOD: u64 = 2000000000;//Units in nanoseconds
+const SYNC_TIME_PERIOD: u64 = 2000000000; //Units in nanoseconds
 const RCOUNT_THRESHOLD: isize = 1000;
 const HCOUNT_MULTIPLIER: isize = 2;
 const NUM_SHARDS: usize = 8;
@@ -151,7 +151,10 @@ impl<F> Domain<F> {
             if avail == crate::ptr::null::<HazPtrRecord>() as usize {
                 return (crate::ptr::null_mut(), 0);
             }
-            debug_assert_ne!(avail, crate::ptr::null::<HazPtrRecord>() as usize | LOCK_BIT);
+            debug_assert_ne!(
+                avail,
+                crate::ptr::null::<HazPtrRecord>() as usize | LOCK_BIT
+            );
             if (avail as usize & LOCK_BIT) == 0 {
                 // Definitely a valid pointer now.
                 let avail: *const HazPtrRecord = avail as _;
@@ -307,6 +310,9 @@ impl<F> Domain<F> {
         unsafe { self.untagged[Self::calc_shard(retired)].push(retired, retired) };
         self.count.fetch_add(1, Ordering::Release);
 
+        #[cfg(not(feature = "std"))]
+        return 0;
+        #[cfg(feature = "std")]
         self.check_threshold_and_reclaim()
     }
 
@@ -314,6 +320,7 @@ impl<F> Domain<F> {
         RCOUNT_THRESHOLD.max(HCOUNT_MULTIPLIER * self.hazptrs.count.load(Ordering::Acquire))
     }
 
+    #[cfg(feature = "std")]
     fn check_count_threshold(&self) -> isize {
         let rcount = self.count.load(Ordering::Acquire);
         while rcount > self.threshold() {
@@ -330,6 +337,7 @@ impl<F> Domain<F> {
         0
     }
 
+    #[cfg(feature = "std")]
     fn check_due_time(&self) -> isize {
         let time = Self::now();
         let due = self.due_time.load(Ordering::Acquire);
@@ -350,6 +358,7 @@ impl<F> Domain<F> {
         self.count.swap(0, Ordering::AcqRel)
     }
 
+    #[cfg(feature = "std")]
     fn check_threshold_and_reclaim(&self) -> usize {
         let mut rcount = self.check_count_threshold();
         if rcount == 0 {
@@ -401,7 +410,16 @@ impl<F> Domain<F> {
             if rcount != 0 {
                 self.count.fetch_add(rcount, Ordering::Release);
             }
-            rcount = self.check_count_threshold();
+            #[cfg(feature = "std")]
+            {
+                rcount = self.check_count_threshold();
+            }
+            #[cfg(not(feature = "std"))]
+            {
+                //Assume there is nothing more to reclaim because we dont have access to time
+                rcount = 0;
+            }
+
             if rcount == 0 && done {
                 break;
             }
@@ -503,12 +521,7 @@ impl<F> Domain<F> {
                 .as_nanos(),
         )
         .expect("system time is too far into the future")
-    }
-
-    #[cfg(not(feature = "std"))]
-    fn now() -> u64 {
-        unimplemented!()
-    }
+    } 
 
     pub fn eager_reclaim(&self) -> usize {
         let rcount = self.count.swap(0, Ordering::AcqRel);

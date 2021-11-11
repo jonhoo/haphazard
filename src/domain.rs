@@ -48,6 +48,7 @@ pub struct Domain<F> {
     nbulk_reclaims: AtomicUsize,
     count: AtomicIsize,
     shutdown: bool,
+    #[cfg(all(not(loom), not(feature = "std")))]
     shard_hash_state: AtomicUsize,
 }
 
@@ -90,10 +91,16 @@ macro_rules! new {
                 nbulk_reclaims: AtomicUsize::new(0),
                 family: PhantomData,
                 shutdown: false,
+                #[cfg(not(feature = "std"))]
                 shard_hash_state: AtomicUsize::new(0),
             }
         }
     };
+}
+
+#[cfg(all(not(loom), feature = "std"))]
+thread_local! {
+    static SHARD_STATE: AtomicUsize = AtomicUsize::new(0);
 }
 
 impl<F> Domain<F> {
@@ -554,7 +561,13 @@ impl<F> Domain<F> {
     fn calc_shard(&self, input: *mut Retired) -> usize {
         //XXX: This is not prime if a usize 32 bits
         const LARGE_PRIME: usize = 4445950232728569541;
-        let input = input as usize ^ self.shard_hash_state.load(Ordering::Relaxed);
+
+        #[cfg(not(feature = "std"))]
+        let state = self.shard_hash_state.load(Ordering::Relaxed);
+        #[cfg(feature = "std")]
+        let state = SHARD_STATE.with(|v| v.load(Ordering::Relaxed));
+
+        let input = input as usize ^ state;
 
         //XXX: Could be made simpler without the slice stuff using mem::transmute
         let mul_result = (input as u128 * LARGE_PRIME as u128).to_ne_bytes();
@@ -564,7 +577,11 @@ impl<F> Domain<F> {
         let mut new_state = [0u8; 8];
         new_state.copy_from_slice(&mul_result[8..16]);
 
+        #[cfg(not(feature = "std"))]
         self.shard_hash_state.store(u64::from_ne_bytes(new_state) as usize, Ordering::Relaxed);
+        #[cfg(feature = "std")]
+        SHARD_STATE.with(|v| v.store(u64::from_ne_bytes(new_state) as usize, Ordering::Relaxed));
+
         u64::from_ne_bytes(hash) as usize & SHARD_MASK
     }
 

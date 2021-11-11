@@ -527,11 +527,6 @@ impl<F> Domain<F> {
         .expect("system time is too far into the future")
     }
 
-    #[cfg(not(feature = "std"))]
-    fn now() -> u64 {
-        unimplemented!()
-    }
-
     pub fn eager_reclaim(&self) -> usize {
         let rcount = self.count.swap(0, Ordering::AcqRel);
         if rcount != 0 {

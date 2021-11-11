@@ -559,8 +559,22 @@ impl<F> Domain<F> {
 
     #[cfg(all(not(loom), feature = "multiply_hash"))]
     fn calc_shard(&self, input: *mut Retired) -> usize {
-        //XXX: This is not prime if a usize 32 bits
+        #[cfg(target_pointer_width = "64")]
         const LARGE_PRIME: usize = 4445950232728569541;
+        #[cfg(target_pointer_width = "64")]
+        type MulType = u128;
+
+        #[cfg(target_pointer_width = "32")]
+        const LARGE_PRIME: usize = 4294908193;
+        #[cfg(target_pointer_width = "32")]
+        type MulType = u64;
+
+        #[cfg(target_pointer_width = "16")]
+        const LARGE_PRIME: usize = 63113;
+        #[cfg(target_pointer_width = "16")]
+        type MulType = u32;
+
+        const USIZE_BYTES: usize = std::mem::size_of::<usize>();
 
         #[cfg(not(feature = "std"))]
         let state = self.shard_hash_state.load(Ordering::Relaxed);
@@ -569,20 +583,22 @@ impl<F> Domain<F> {
 
         let input = input as usize ^ state;
 
-        //XXX: Could be made simpler without the slice stuff using mem::transmute
-        let mul_result = (input as u128 * LARGE_PRIME as u128).to_ne_bytes();
-        let mut hash = [0u8; 8];
-        hash.copy_from_slice(&mul_result[0..8]);
+        //Use `widening_mul` once https://github.com/rust-lang/rust/issues/85532 is stabilized
+        let mul_result = (input as MulType * LARGE_PRIME as MulType).to_ne_bytes();
 
-        let mut new_state = [0u8; 8];
-        new_state.copy_from_slice(&mul_result[8..16]);
+        //XXX: Could be made simpler without the slice stuff using mem::transmute
+        let mut hash = [0u8; USIZE_BYTES];
+        hash.copy_from_slice(&mul_result[0..USIZE_BYTES]);
+
+        let mut new_state = [0u8; USIZE_BYTES];
+        new_state.copy_from_slice(&mul_result[USIZE_BYTES..(2 * USIZE_BYTES)]);
 
         #[cfg(not(feature = "std"))]
-        self.shard_hash_state.store(u64::from_ne_bytes(new_state) as usize, Ordering::Relaxed);
+        self.shard_hash_state.store(usize::from_ne_bytes(new_state), Ordering::Relaxed);
         #[cfg(feature = "std")]
-        SHARD_STATE.with(|v| v.store(u64::from_ne_bytes(new_state) as usize, Ordering::Relaxed));
+        SHARD_STATE.with(|v| v.store(usize::from_ne_bytes(new_state), Ordering::Relaxed));
 
-        u64::from_ne_bytes(hash) as usize & SHARD_MASK
+        usize::from_ne_bytes(hash) as usize & SHARD_MASK
     }
 
     #[cfg(all(not(loom), not(feature = "multiply_hash")))]

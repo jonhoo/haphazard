@@ -314,9 +314,6 @@ impl<F> Domain<F> {
         unsafe { self.untagged[Self::calc_shard(retired)].push(retired, retired) };
         self.count.fetch_add(1, Ordering::Release);
 
-        #[cfg(not(feature = "std"))]
-        return 0;
-        #[cfg(feature = "std")]
         self.check_threshold_and_reclaim()
     }
 
@@ -324,7 +321,6 @@ impl<F> Domain<F> {
         RCOUNT_THRESHOLD.max(HCOUNT_MULTIPLIER * self.hazptrs.count.load(Ordering::Acquire))
     }
 
-    #[cfg(feature = "std")]
     fn check_count_threshold(&self) -> isize {
         let rcount = self.count.load(Ordering::Acquire);
         while rcount > self.threshold() {
@@ -333,6 +329,7 @@ impl<F> Domain<F> {
                 .compare_exchange_weak(rcount, 0, Ordering::AcqRel, Ordering::Relaxed)
                 .is_ok()
             {
+                #[cfg(feature = "std")]
                 self.due_time
                     .store(Self::now() + SYNC_TIME_PERIOD, Ordering::Release);
                 return rcount;
@@ -341,28 +338,29 @@ impl<F> Domain<F> {
         0
     }
 
-    #[cfg(feature = "std")]
     fn check_due_time(&self) -> isize {
-        let time = Self::now();
-        let due = self.due_time.load(Ordering::Acquire);
-        if time < due
-            || self
-                .due_time
-                .compare_exchange(
-                    due,
-                    time + SYNC_TIME_PERIOD,
-                    Ordering::AcqRel,
-                    Ordering::Relaxed,
-                )
-                .is_err()
+        #[cfg(feature = "std")]
         {
-            // Not yet due, or someone else noticed we were due already.
-            return 0;
+            let time = Self::now();
+            let due = self.due_time.load(Ordering::Acquire);
+            if time < due
+                || self
+                    .due_time
+                    .compare_exchange(
+                        due,
+                        time + SYNC_TIME_PERIOD,
+                        Ordering::AcqRel,
+                        Ordering::Relaxed,
+                    )
+                    .is_err()
+            {
+                // Not yet due, or someone else noticed we were due already.
+                return 0;
+            }
         }
         self.count.swap(0, Ordering::AcqRel)
     }
 
-    #[cfg(feature = "std")]
     fn check_threshold_and_reclaim(&self) -> usize {
         let mut rcount = self.check_count_threshold();
         if rcount == 0 {
@@ -414,15 +412,7 @@ impl<F> Domain<F> {
             if rcount != 0 {
                 self.count.fetch_add(rcount, Ordering::Release);
             }
-            #[cfg(feature = "std")]
-            {
-                rcount = self.check_count_threshold();
-            }
-            #[cfg(not(feature = "std"))]
-            {
-                //Assume there is nothing more to reclaim because we dont have access to time
-                rcount = 0;
-            }
+            rcount = self.check_count_threshold();
 
             if rcount == 0 && done {
                 break;

@@ -46,7 +46,7 @@ fn acquires_multiple() {
         let t1 = thread::spawn(move || {
             let mut hazptr_array = HazardPointer::make_many_in_domain(&domain);
 
-            let [my_x, my_y] = unsafe { hazptr_array.protect([&x1, &y1]) };
+            let [my_x, my_y] = unsafe { hazptr_array.protect_all([&x1, &y1]) };
 
             let my_x = my_x.expect("not null");
             let my_y = my_y.expect("not null");

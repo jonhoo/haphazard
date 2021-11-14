@@ -33,7 +33,7 @@ fn acquires_multiple() {
     //
     //  1. AtomicPtr points to a Box, so is always valid.
     //  2. Writers to AtomicPtr use HazPtrObject::retire.
-    let [mut one, mut two] = hazptr_array.protectors();
+    let [one, two] = hazptr_array.hazard_pointers();
     let my_x = unsafe { one.protect(&x) }.expect("not null");
     let my_y = unsafe { two.protect(&y) }.expect("not null");
 
@@ -46,7 +46,7 @@ fn acquires_multiple() {
     // let _: i32 = my_x.0;
     // let _: i32 = my_y.0;
 
-    let [my_x, my_y] = unsafe { hazptr_array.protect([&x, &y]) };
+    let [my_x, my_y] = unsafe { hazptr_array.protect_all([&x, &y]) };
 
     let my_x = my_x.expect("not null");
     let my_y = my_y.expect("not null");

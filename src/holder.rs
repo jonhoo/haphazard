@@ -1,44 +1,26 @@
 use crate::sync::atomic::AtomicPtr;
 use crate::{Domain, HazPtrObject, HazPtrRecord};
-use std::marker::PhantomData;
+use std::mem::{ManuallyDrop, MaybeUninit};
 use std::sync::atomic::Ordering;
 
-pub struct HazardPointerToken<'array, 'domain, F> {
-    record: &'domain HazPtrRecord,
-    domain: &'domain Domain<F>,
-    _array: PhantomData<&'array ()>,
-}
-
-impl<'array, 'domain, F> HazardPointerToken<'array, 'domain, F> {
-    ///
-    /// # Safety
-    ///
-    /// Caller must guarantee that the address in `AtomicPtr` is valid as a reference, or null.
-    /// Caller must also guarantee that the value behind the `AtomicPtr` will only be deallocated
-    /// through calls to [`HazPtrObject::retire`] on the same [`Domain`] as this holder is
-    /// associated with.
-    pub unsafe fn protect<'l, 'o, T>(&'l mut self, src: &'_ AtomicPtr<T>) -> Option<&'l T>
-    where
-        T: HazPtrObject<'o, F>,
-        'o: 'l,
-        F: 'static,
-    {
-        unsafe { protect(&self.domain, &self.record, src) }
-    }
-}
-
 pub struct HazardPointerArray<'domain, F, const N: usize> {
-    domain: &'domain Domain<F>,
-    records: [&'domain HazPtrRecord; N],
+    haz_ptrs: [ManuallyDrop<HazardPointer<'domain, F>>; N],
 }
 
 impl<'domain, F, const N: usize> HazardPointerArray<'domain, F, N> {
-    pub fn protectors<'array>(&'array mut self) -> [HazardPointerToken<'array, 'domain, F>; N] {
-        self.records.map(|record| HazardPointerToken {
-            record,
-            domain: self.domain,
-            _array: PhantomData,
-        })
+    pub fn hazard_pointers<'array>(&'array mut self) -> [&'array mut HazardPointer<'domain, F>; N] {
+        let mut out: [MaybeUninit<&'array mut HazardPointer<'domain, F>>; N] =
+            [(); N].map(|_| MaybeUninit::uninit());
+
+        for (i, hazptr) in self.haz_ptrs.iter_mut().enumerate() {
+            out[i].write(hazptr);
+        }
+
+        //
+        // # Safety
+        //
+        // We have initialized every element of the array with our for loop above
+        out.map(|maybe_uninit| unsafe { maybe_uninit.assume_init() })
     }
 
     ///
@@ -48,7 +30,7 @@ impl<'domain, F, const N: usize> HazardPointerArray<'domain, F, N> {
     /// Caller must also guarantee that the value behind the `AtomicPtr` will only be deallocated
     /// through calls to [`HazPtrObject::retire`] on the same [`Domain`] as this holder is
     /// associated with.
-    pub unsafe fn protect<'l, 'o, T>(
+    pub unsafe fn protect_all<'l, 'o, T>(
         &'l mut self,
         mut sources: [&'_ AtomicPtr<T>; N],
     ) -> [Option<&'l T>; N]
@@ -59,24 +41,36 @@ impl<'domain, F, const N: usize> HazardPointerArray<'domain, F, N> {
     {
         let mut out = [None; N];
 
-        for (i, (hazptr, src)) in self.records.iter_mut().zip(&mut sources).enumerate() {
-            out[i] = unsafe { protect(&self.domain, hazptr, src) };
+        for (i, (hazptr, src)) in self.haz_ptrs.iter_mut().zip(&mut sources).enumerate() {
+            out[i] = unsafe { hazptr.protect(src) };
         }
 
         out
     }
 
     pub fn reset_protection(&mut self) {
-        for hazptr in self.records {
-            hazptr.reset();
+        for hazptr in self.haz_ptrs.iter_mut() {
+            hazptr.reset_protection();
         }
     }
 }
 
-impl<F, const N: usize> Drop for HazardPointerArray<'_, F, N> {
+impl<'domain, F, const N: usize> Drop for HazardPointerArray<'domain, F, N> {
     fn drop(&mut self) {
         self.reset_protection();
-        self.domain.release_many(self.records);
+        let mut records: [MaybeUninit<&'domain HazPtrRecord>; N] = [MaybeUninit::uninit(); N];
+
+        for (i, haz_ptr) in self.haz_ptrs.iter_mut().enumerate() {
+            records[i].write(haz_ptr.hazard);
+        }
+
+        //
+        // # Safety
+        //
+        // We have initialized every element of the array with our for loop above
+        let records = records.map(|maybe_uninit| unsafe { maybe_uninit.assume_init() });
+        let domain = self.haz_ptrs[0].domain;
+        domain.release_many(records);
     }
 }
 
@@ -106,9 +100,11 @@ impl<'domain, F> HazardPointer<'domain, F> {
     pub fn make_many_in_domain<const N: usize>(
         domain: &'domain Domain<F>,
     ) -> HazardPointerArray<'domain, F, N> {
-        let records = domain.acquire_many::<N>();
+        let haz_ptrs = domain
+            .acquire_many::<N>()
+            .map(|hazard| ManuallyDrop::new(HazardPointer { hazard, domain }));
 
-        HazardPointerArray { domain, records }
+        HazardPointerArray { haz_ptrs }
     }
 
     ///
@@ -124,7 +120,23 @@ impl<'domain, F> HazardPointer<'domain, F> {
         'o: 'l,
         F: 'static,
     {
-        unsafe { protect(&self.domain, &self.hazard, src) }
+        let mut ptr = src.load(Ordering::Relaxed);
+        loop {
+            // Safety: same safety requirements as try_protect.
+            match unsafe { self.try_protect(ptr, src) } {
+                Ok(None) => break None,
+                // Safety:
+                // This is needed to workaround a bug in the borrow checker. See:
+                // - https://github.com/rust-lang/rust/issues/51545
+                // - https://github.com/rust-lang/rust/issues/54663
+                // - https://github.com/rust-lang/rust/issues/58910
+                // - https://github.com/rust-lang/rust/issues/84361
+                Ok(Some(r)) => break Some(unsafe { &*(r as *const _) }),
+                Err(ptr2) => {
+                    ptr = ptr2;
+                }
+            }
+        }
     }
 
     ///
@@ -144,92 +156,35 @@ impl<'domain, F> HazardPointer<'domain, F> {
         'o: 'l,
         F: 'static,
     {
-        unsafe { try_protect(&self.domain, &self.hazard, ptr, src) }
+        self.hazard.protect(ptr as *mut u8);
+
+        crate::asymmetric_light_barrier();
+
+        let ptr2 = src.load(Ordering::Acquire);
+        if ptr != ptr2 {
+            self.hazard.reset();
+            Err(ptr2)
+        } else {
+            // All good -- protected
+            Ok(std::ptr::NonNull::new(ptr).map(|nn| {
+                // Safety: this is safe because:
+                //
+                //  1. Target of ptr1 will not be deallocated for the returned lifetime since
+                //     our hazard pointer is active and pointing at ptr1.
+                //  2. Pointer address is valid by the safety contract of load.
+                let r = unsafe { nn.as_ref() };
+                debug_assert_eq!(
+                    self.domain as *const Domain<F>,
+                    r.domain() as *const Domain<F>,
+                    "object guarded by different domain than holder used to access it"
+                );
+                r
+            }))
+        }
     }
 
     pub fn reset_protection(&mut self) {
         self.hazard.reset();
-    }
-}
-
-///
-/// # Safety
-///
-/// Caller must guarantee that the address in `AtomicPtr` is valid as a reference, or null.
-/// Caller must also guarantee that the value behind the `AtomicPtr` will only be deallocated
-/// through calls to [`HazPtrObject::retire`] on the same [`Domain`] as this holder is
-/// associated with.
-unsafe fn protect<'domain, 'l, 'o, F, T>(
-    domain: &'l &'domain Domain<F>,
-    hazard: &'l &'domain HazPtrRecord,
-    src: &'_ AtomicPtr<T>,
-) -> Option<&'l T>
-where
-    T: HazPtrObject<'o, F>,
-    'o: 'l,
-    F: 'static,
-{
-    let mut ptr = src.load(Ordering::Relaxed);
-    loop {
-        // Safety: same safety requirements as try_protect.
-        match unsafe { try_protect(domain, hazard, ptr, src) } {
-            Ok(None) => break None,
-            // Safety:
-            // This is needed to workaround a bug in the borrow checker. See:
-            // - https://github.com/rust-lang/rust/issues/51545
-            // - https://github.com/rust-lang/rust/issues/54663
-            // - https://github.com/rust-lang/rust/issues/58910
-            // - https://github.com/rust-lang/rust/issues/84361
-            Ok(Some(r)) => break Some(unsafe { &*(r as *const _) }),
-            Err(ptr2) => {
-                ptr = ptr2;
-            }
-        }
-    }
-}
-
-///
-/// # Safety
-///
-/// Caller must guarantee that the address in `AtomicPtr` is valid as a reference, or null.
-/// Caller must also guarantee that the value behind the `AtomicPtr` will only be deallocated
-/// through calls to [`HazPtrObject::retire`] on the same [`Domain`] as this holder is
-/// associated with.
-unsafe fn try_protect<'domain, 'l, 'o, F, T>(
-    domain: &'l &'domain Domain<F>,
-    hazard: &'l &'domain HazPtrRecord,
-    ptr: *mut T,
-    src: &'_ AtomicPtr<T>,
-) -> Result<Option<&'l T>, *mut T>
-where
-    T: HazPtrObject<'o, F>,
-    'o: 'l,
-    F: 'static,
-{
-    hazard.protect(ptr as *mut u8);
-
-    crate::asymmetric_light_barrier();
-
-    let ptr2 = src.load(Ordering::Acquire);
-    if ptr != ptr2 {
-        hazard.reset();
-        Err(ptr2)
-    } else {
-        // All good -- protected
-        Ok(std::ptr::NonNull::new(ptr).map(|nn| {
-            // Safety: this is safe because:
-            //
-            //  1. Target of ptr1 will not be deallocated for the returned lifetime since
-            //     our hazard pointer is active and pointing at ptr1.
-            //  2. Pointer address is valid by the safety contract of load.
-            let r = unsafe { nn.as_ref() };
-            debug_assert_eq!(
-                *domain as *const Domain<F>,
-                r.domain() as *const Domain<F>,
-                "object guarded by different domain than holder used to access it"
-            );
-            r
-        }))
     }
 }
 

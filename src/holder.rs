@@ -146,7 +146,7 @@ impl<'domain, F> HazardPointer<'domain, F> {
     /// Caller must also guarantee that the value behind the `AtomicPtr` will only be deallocated
     /// through calls to [`HazPtrObject::retire`] on the same [`Domain`] as this holder is
     /// associated with.
-    unsafe fn try_protect<'l, 'o, T>(
+    pub unsafe fn try_protect<'l, 'o, T>(
         &'l mut self,
         ptr: *mut T,
         src: &'_ AtomicPtr<T>,

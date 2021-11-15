@@ -8,7 +8,7 @@ pub(crate) struct HazPtrRecord {
 
 impl HazPtrRecord {
     pub(crate) fn reset(&self) {
-        self.ptr.store(crate::ptr::null_mut(), Ordering::Release);
+        self.ptr.store(core::ptr::null_mut(), Ordering::Release);
     }
 
     pub(crate) fn protect(&self, ptr: *mut u8) {

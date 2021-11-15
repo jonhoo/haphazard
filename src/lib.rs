@@ -3,7 +3,6 @@
 #![allow(dead_code)]
 #![cfg_attr(not(feature = "std"), no_std)]
 
-#[cfg(not(feature = "std"))]
 extern crate alloc;
 
 mod deleter;
@@ -37,4 +36,3 @@ pub use holder::HazardPointer;
 pub use object::{HazPtrObject, HazPtrObjectWrapper};
 
 pub(crate) use record::HazPtrRecord;
-pub(crate) use sync::{ptr, marker, mem, boxed, ops};

@@ -1,5 +1,5 @@
 use crate::{Deleter, Domain, Reclaim};
-use crate::ops::{Deref, DerefMut};
+use core::ops::{Deref, DerefMut};
 
 pub trait HazPtrObject<'domain, F: 'static>
 where

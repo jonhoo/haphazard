@@ -79,7 +79,7 @@ impl<'domain, F> HazardPointer<'domain, F> {
             Err(ptr2)
         } else {
             // All good -- protected
-            Ok(crate::ptr::NonNull::new(ptr).map(|nn| {
+            Ok(core::ptr::NonNull::new(ptr).map(|nn| {
                 // Safety: this is safe because:
                 //
                 //  1. Target of ptr1 will not be deallocated for the returned lifetime since

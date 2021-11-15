@@ -1,5 +1,6 @@
 use crate::sync::atomic::{AtomicIsize, AtomicPtr, AtomicU64, AtomicUsize, Ordering};
-use crate::{boxed::Box, marker::PhantomData};
+use core::marker::PhantomData;
+use alloc::boxed::Box;
 use crate::{Deleter, HazPtrRecord, Reclaim};
 
 #[cfg(not(feature = "std"))]
@@ -85,7 +86,7 @@ macro_rules! new {
             };
             Self {
                 hazptrs: HazPtrRecords {
-                    head: AtomicPtr::new(crate::ptr::null_mut()),
+                    head: AtomicPtr::new(core::ptr::null_mut()),
                     head_available: AtomicUsize::new(0),
                     count: AtomicIsize::new(0),
                 },
@@ -117,7 +118,7 @@ impl<F> Domain<F> {
         let (mut head, n) = self.try_acquire_available::<N>();
         assert!(n <= N);
 
-        let mut tail = crate::ptr::null();
+        let mut tail = core::ptr::null();
         [(); N].map(|_| {
             if !head.is_null() {
                 // Safety: HazPtrRecords are never deallocated.
@@ -148,16 +149,16 @@ impl<F> Domain<F> {
 
     fn try_acquire_available<const N: usize>(&self) -> (*const HazPtrRecord, usize) {
         debug_assert!(N >= 1);
-        debug_assert_eq!(crate::ptr::null::<HazPtrRecord>() as usize, 0);
+        debug_assert_eq!(core::ptr::null::<HazPtrRecord>() as usize, 0);
 
         loop {
             let avail = self.hazptrs.head_available.load(Ordering::Acquire);
-            if avail == crate::ptr::null::<HazPtrRecord>() as usize {
-                return (crate::ptr::null_mut(), 0);
+            if avail == core::ptr::null::<HazPtrRecord>() as usize {
+                return (core::ptr::null_mut(), 0);
             }
             debug_assert_ne!(
                 avail,
-                crate::ptr::null::<HazPtrRecord>() as usize | LOCK_BIT
+                core::ptr::null::<HazPtrRecord>() as usize | LOCK_BIT
             );
             if (avail as usize & LOCK_BIT) == 0 {
                 // Definitely a valid pointer now.
@@ -217,7 +218,7 @@ impl<F> Domain<F> {
             .store(next as usize, Ordering::Release);
         unsafe { &*tail }
             .available_next
-            .store(crate::ptr::null_mut(), Ordering::Relaxed);
+            .store(core::ptr::null_mut(), Ordering::Relaxed);
 
         (head, n)
     }
@@ -255,9 +256,9 @@ impl<F> Domain<F> {
     pub(crate) fn acquire_new(&self) -> &HazPtrRecord {
         // No free HazPtrRecords -- need to allocate a new one
         let hazptr = Box::into_raw(Box::new(HazPtrRecord {
-            ptr: AtomicPtr::new(crate::ptr::null_mut()),
-            next: AtomicPtr::new(crate::ptr::null_mut()),
-            available_next: AtomicPtr::new(crate::ptr::null_mut()),
+            ptr: AtomicPtr::new(core::ptr::null_mut()),
+            next: AtomicPtr::new(core::ptr::null_mut()),
+            available_next: AtomicPtr::new(core::ptr::null_mut()),
         }));
         // And stick it at the head of the linked list
         let mut head = self.hazptrs.head.load(Ordering::Acquire);
@@ -378,7 +379,7 @@ impl<F> Domain<F> {
         let mut total_reclaimed = 0;
         loop {
             let mut done = true;
-            let mut stolen_heads = [crate::ptr::null_mut(); NUM_SHARDS];
+            let mut stolen_heads = [core::ptr::null_mut(); NUM_SHARDS];
             let mut empty = true;
             for i in 0..NUM_SHARDS {
                 stolen_heads[i] = self.untagged[i].pop_all();
@@ -427,7 +428,7 @@ impl<F> Domain<F> {
         stolen_heads: [*mut Retired; NUM_SHARDS],
         guarded_ptrs: &Set<*mut u8>,
     ) -> (usize, bool) {
-        let mut unreclaimed = crate::ptr::null_mut();
+        let mut unreclaimed = core::ptr::null_mut();
         let mut unreclaimed_tail = unreclaimed;
         let mut nreclaimed = 0;
 
@@ -437,7 +438,7 @@ impl<F> Domain<F> {
             let mut node = stolen_heads[i];
             // XXX: This can probably also be hoisted out of the loop, and we can do a _single_
             // reclaim_unprotected call as well.
-            let mut reclaimable = crate::ptr::null_mut();
+            let mut reclaimable = core::ptr::null_mut();
 
             while !node.is_null() {
                 // Safety: All accessors only access the head, and the head is no longer pointing here.
@@ -606,9 +607,9 @@ impl Retired {
         deleter: &'static dyn Deleter,
     ) -> Self {
         Retired {
-            ptr: unsafe { crate::mem::transmute::<_, *mut (dyn Reclaim + 'static)>(ptr) },
+            ptr: unsafe { core::mem::transmute::<_, *mut (dyn Reclaim + 'static)>(ptr) },
             deleter,
-            next: AtomicPtr::new(crate::ptr::null_mut()),
+            next: AtomicPtr::new(core::ptr::null_mut()),
         }
     }
 }
@@ -622,13 +623,13 @@ impl RetiredList {
     #[cfg(not(loom))]
     const fn new() -> Self {
         Self {
-            head: AtomicPtr::new(crate::ptr::null_mut()),
+            head: AtomicPtr::new(core::ptr::null_mut()),
         }
     }
     #[cfg(loom)]
     fn new() -> Self {
         Self {
-            head: AtomicPtr::new(crate::ptr::null_mut()),
+            head: AtomicPtr::new(core::ptr::null_mut()),
         }
     }
 
@@ -664,7 +665,7 @@ impl RetiredList {
     }
 
     fn pop_all(&self) -> *mut Retired {
-        self.head.swap(crate::ptr::null_mut(), Ordering::Acquire)
+        self.head.swap(core::ptr::null_mut(), Ordering::Acquire)
     }
 
     fn is_empty(&self) -> bool {

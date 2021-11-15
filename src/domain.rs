@@ -1,7 +1,7 @@
 use crate::sync::atomic::{AtomicIsize, AtomicPtr, AtomicU64, AtomicUsize, Ordering};
-use core::marker::PhantomData;
-use alloc::boxed::Box;
 use crate::{Deleter, HazPtrRecord, Reclaim};
+use alloc::boxed::Box;
+use core::marker::PhantomData;
 
 #[cfg(not(feature = "std"))]
 use alloc::collections::BTreeSet as Set;
@@ -54,7 +54,6 @@ pub struct Domain<F> {
     nbulk_reclaims: AtomicUsize,
     count: AtomicIsize,
     shutdown: bool,
-    shard_hash_state: AtomicUsize,
 }
 
 impl Domain<Global> {
@@ -96,7 +95,6 @@ macro_rules! new {
                 nbulk_reclaims: AtomicUsize::new(0),
                 family: PhantomData,
                 shutdown: false,
-                shard_hash_state: AtomicUsize::new(0),
             }
         }
     };
@@ -156,10 +154,7 @@ impl<F> Domain<F> {
             if avail == core::ptr::null::<HazPtrRecord>() as usize {
                 return (core::ptr::null_mut(), 0);
             }
-            debug_assert_ne!(
-                avail,
-                core::ptr::null::<HazPtrRecord>() as usize | LOCK_BIT
-            );
+            debug_assert_ne!(avail, core::ptr::null::<HazPtrRecord>() as usize | LOCK_BIT);
             if (avail as usize & LOCK_BIT) == 0 {
                 // Definitely a valid pointer now.
                 let avail: *const HazPtrRecord = avail as _;
@@ -339,8 +334,8 @@ impl<F> Domain<F> {
         0
     }
 
+    #[cfg(feature = "std")]
     fn check_due_time(&self) -> isize {
-        #[cfg(feature = "std")]
         {
             let time = Self::now();
             let due = self.due_time.load(Ordering::Acquire);
@@ -365,10 +360,19 @@ impl<F> Domain<F> {
     fn check_threshold_and_reclaim(&self) -> usize {
         let mut rcount = self.check_count_threshold();
         if rcount == 0 {
-            rcount = self.check_due_time();
-            if rcount == 0 {
-                return 0;
+
+            #[cfg(feature = "std")]
+            {
+                //TODO: Implement some kind of mock time for no_std.
+                //Currently we reclaim only based on rcount on no_std
+                rcount = self.check_due_time();
+                if rcount == 0 {
+                    return 0;
+                }
             }
+            //Nothing to reclaim on no_std
+            #[cfg(not(feature = "std"))]
+            return 0;
         }
 
         self.nbulk_reclaims.fetch_add(1, Ordering::Acquire);

@@ -36,4 +36,3 @@ pub(crate) mod atomic {
 pub(crate) fn yield_now() {
     //FIXME: What goes here?
 }
-

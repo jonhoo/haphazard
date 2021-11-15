@@ -3,10 +3,7 @@ use crate::{Deleter, HazPtrRecord, Reclaim};
 use alloc::boxed::Box;
 use core::marker::PhantomData;
 
-#[cfg(not(feature = "std"))]
-use alloc::collections::BTreeSet as Set;
-#[cfg(feature = "std")]
-use std::collections::HashSet as Set;
+use alloc::collections::BTreeSet;
 
 #[cfg(feature = "std")]
 const SYNC_TIME_PERIOD: u64 = std::time::Duration::from_nanos(2000000000).as_nanos() as u64;
@@ -397,7 +394,8 @@ impl<F> Domain<F> {
 
                 // Find all guarded addresses.
                 #[allow(clippy::mutable_key_type)]
-                let mut guarded_ptrs = Set::new();
+                //XXX: Maybe use a sorted vec to reduce heap allocations, and have O(log(n)) lookups
+                let mut guarded_ptrs = BTreeSet::new();
                 let mut node = self.hazptrs.head.load(Ordering::Acquire);
                 while !node.is_null() {
                     // Safety: HazPtrRecords are never de-allocated while the domain lives.
@@ -430,7 +428,7 @@ impl<F> Domain<F> {
     fn match_reclaim_untagged(
         &self,
         stolen_heads: [*mut Retired; NUM_SHARDS],
-        guarded_ptrs: &Set<*mut u8>,
+        guarded_ptrs: &BTreeSet<*mut u8>,
     ) -> (usize, bool) {
         let mut unreclaimed = core::ptr::null_mut();
         let mut unreclaimed_tail = unreclaimed;

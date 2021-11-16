@@ -64,6 +64,7 @@ impl<'domain, F, const N: usize> Drop for HazardPointerArray<'domain, F, N> {
     fn drop(&mut self) {
         self.reset_protection();
         let domain = self.haz_ptrs[0].domain;
+        // replace with `self.haz_ptrs.each_ref().map(|v| v.hazard)` when each_ref stabilizes
         let records = self.hazard_pointers().map(|hazptr| hazptr.hazard);
         domain.release_many(records);
     }

@@ -4,11 +4,16 @@ use std::mem::{ManuallyDrop, MaybeUninit};
 use std::sync::atomic::Ordering;
 
 pub struct HazardPointerArray<'domain, F, const N: usize> {
+    // ManuallyDrop is required to prevent the HazardPointer from returning itself, since
+    // HazardPointerArray has it's own drop implementation with an optimized return for allow hazard
+    // pointers
     haz_ptrs: [ManuallyDrop<HazardPointer<'domain, F>>; N],
 }
 
 impl<'domain, F, const N: usize> HazardPointerArray<'domain, F, N> {
     pub fn hazard_pointers<'array>(&'array mut self) -> [&'array mut HazardPointer<'domain, F>; N] {
+        // replace with `self.haz_ptrs.each_mut().map(|v| &mut **v)` when each_mut stabilizes
+
         let mut out: [MaybeUninit<&'array mut HazardPointer<'domain, F>>; N] =
             [(); N].map(|_| MaybeUninit::uninit());
 
@@ -58,18 +63,8 @@ impl<'domain, F, const N: usize> HazardPointerArray<'domain, F, N> {
 impl<'domain, F, const N: usize> Drop for HazardPointerArray<'domain, F, N> {
     fn drop(&mut self) {
         self.reset_protection();
-        let mut records: [MaybeUninit<&'domain HazPtrRecord>; N] = [MaybeUninit::uninit(); N];
-
-        for (i, haz_ptr) in self.haz_ptrs.iter_mut().enumerate() {
-            records[i].write(haz_ptr.hazard);
-        }
-
-        //
-        // # Safety
-        //
-        // We have initialized every element of the array with our for loop above
-        let records = records.map(|maybe_uninit| unsafe { maybe_uninit.assume_init() });
         let domain = self.haz_ptrs[0].domain;
+        let records = self.hazard_pointers().map(|hazptr| hazptr.hazard);
         domain.release_many(records);
     }
 }

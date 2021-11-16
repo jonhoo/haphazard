@@ -4,8 +4,8 @@ use std::mem::{ManuallyDrop, MaybeUninit};
 use std::sync::atomic::Ordering;
 
 pub struct HazardPointerArray<'domain, F, const N: usize> {
-    // ManuallyDrop is required to prevent the HazardPointer from returning itself, since
-    // HazardPointerArray has it's own drop implementation with an optimized return for allow hazard
+    // ManuallyDrop is required to prevent the HazardPointer from reclaiming itself, since
+    // HazardPointerArray has it's own drop implementation with an optimized reclaim for all hazard
     // pointers
     haz_ptrs: [ManuallyDrop<HazardPointer<'domain, F>>; N],
 }

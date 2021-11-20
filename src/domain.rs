@@ -113,14 +113,19 @@ impl<F> Domain<F> {
         let mut tail = std::ptr::null();
         [(); N].map(|_| {
             if !head.is_null() {
+                tail = head;
                 // Safety: HazPtrRecords are never deallocated.
                 let rec = unsafe { &*head };
-                head = rec.next.load(Ordering::Relaxed);
-                tail = head;
+                head = rec.available_next.load(Ordering::Relaxed);
                 rec
             } else {
                 let rec = self.acquire_new();
-                rec.available_next.store(tail as *mut _, Ordering::Relaxed);
+                // Make sure we also link in the newly allocated nodes.
+                if !tail.is_null() {
+                    unsafe { &*tail }
+                        .available_next
+                        .store(rec as *const _ as *mut _, Ordering::Relaxed);
+                }
                 tail = rec as *const _;
                 rec
             }
@@ -722,3 +727,153 @@ struct CannotConfuseGlobalReader;
 /// ```
 #[cfg(doctest)]
 struct CannotConfuseAcrossFamilies;
+
+#[cfg(test)]
+mod tests {
+    use super::Domain;
+    use std::{ptr::null_mut, sync::atomic::Ordering};
+
+    #[test]
+    fn acquire_many_skips_used_nodes() {
+        let domain = Domain::new(&());
+        let rec1 = domain.acquire();
+        let rec2 = domain.acquire();
+        let rec3 = domain.acquire();
+
+        assert_eq!(
+            rec3.next.load(Ordering::Relaxed),
+            rec2 as *const _ as *mut _
+        );
+        assert_eq!(
+            rec2.next.load(Ordering::Relaxed),
+            rec1 as *const _ as *mut _
+        );
+        assert_eq!(rec1.next.load(Ordering::Relaxed), std::ptr::null_mut());
+        domain.release(rec1);
+        domain.release(rec3);
+        drop(rec1);
+        drop(rec3);
+
+        let [one, two, three] = domain.acquire_many();
+
+        assert_eq!(
+            one.available_next.load(Ordering::Relaxed),
+            two as *const _ as *mut _
+        );
+        assert_eq!(
+            two.available_next.load(Ordering::Relaxed),
+            three as *const _ as *mut _
+        );
+        assert_eq!(
+            three.available_next.load(Ordering::Relaxed),
+            std::ptr::null_mut(),
+        );
+
+        // one was previously rec3
+        // two was previously rec1
+        // so proper ordering for next is three -> rec3/one -> rec2 -> rec1/two
+        assert_eq!(
+            three.next.load(Ordering::Relaxed),
+            one as *const _ as *mut _
+        );
+        assert_eq!(one.next.load(Ordering::Relaxed), rec2 as *const _ as *mut _);
+        assert_eq!(rec2.next.load(Ordering::Relaxed), two as *const _ as *mut _);
+    }
+
+    #[test]
+    fn acquire_many_orders_nodes_between_acquires() {
+        let domain = Domain::new(&());
+        let rec1 = domain.acquire();
+        let rec2 = domain.acquire();
+
+        assert_eq!(
+            rec2.next.load(Ordering::Relaxed),
+            rec1 as *const _ as *mut _
+        );
+        domain.release(rec2);
+        drop(rec2);
+
+        // one was previously rec2
+        // two is a new node
+        let [one, two] = domain.acquire_many();
+
+        assert_eq!(
+            one.available_next.load(Ordering::Relaxed),
+            two as *const _ as *mut _
+        );
+        assert_eq!(
+            two.available_next.load(Ordering::Relaxed),
+            std::ptr::null_mut(),
+        );
+
+        assert_eq!(two.next.load(Ordering::Relaxed), one as *const _ as *mut _);
+        assert_eq!(one.next.load(Ordering::Relaxed), rec1 as *const _ as *mut _);
+    }
+
+    #[test]
+    fn acquire_many_properly_orders_reused_nodes() {
+        let domain = Domain::new(&());
+        let rec1 = domain.acquire();
+        let rec2 = domain.acquire();
+        let rec3 = domain.acquire();
+
+        // rec3 -> rec2 -> rec1
+        assert_eq!(rec1.next.load(Ordering::Relaxed), std::ptr::null_mut(),);
+        assert_eq!(
+            rec2.next.load(Ordering::Relaxed),
+            rec1 as *const _ as *mut _
+        );
+        assert_eq!(
+            rec3.next.load(Ordering::Relaxed),
+            rec2 as *const _ as *mut _
+        );
+
+        // rec1 available_next -> null
+        domain.release(rec1);
+        // rec2 available_next -> rec1
+        domain.release(rec2);
+        // rec3 available_next -> rec2
+        domain.release(rec3);
+        drop(rec1);
+        drop(rec2);
+        drop(rec3);
+
+        // one is rec3
+        // two is rec2
+        // three is rec1
+        let [one, two, three, four, five] = domain.acquire_many();
+
+        assert_eq!(
+            one.available_next.load(Ordering::Relaxed),
+            two as *const _ as *mut _
+        );
+        assert_eq!(
+            two.available_next.load(Ordering::Relaxed),
+            three as *const _ as *mut _
+        );
+        assert_eq!(
+            three.available_next.load(Ordering::Relaxed),
+            four as *const _ as *mut _
+        );
+        assert_eq!(
+            four.available_next.load(Ordering::Relaxed),
+            five as *const _ as *mut _
+        );
+        assert_eq!(
+            five.available_next.load(Ordering::Relaxed),
+            std::ptr::null_mut(),
+        );
+
+        assert_eq!(
+            five.next.load(Ordering::Relaxed),
+            four as *const _ as *mut _
+        );
+        assert_eq!(four.next.load(Ordering::Relaxed), one as *const _ as *mut _);
+        assert_eq!(one.next.load(Ordering::Relaxed), two as *const _ as *mut _);
+        assert_eq!(
+            two.next.load(Ordering::Relaxed),
+            three as *const _ as *mut _
+        );
+        assert_eq!(three.next.load(Ordering::Relaxed), null_mut());
+    }
+}

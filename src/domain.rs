@@ -1,9 +1,9 @@
-use crate::sync::atomic::{AtomicIsize, AtomicPtr, AtomicU64, AtomicUsize, Ordering};
+use crate::sync::atomic::{AtomicIsize, AtomicPtr, AtomicU64, AtomicUsize};
 use crate::{Deleter, HazPtrRecord, Reclaim};
 use alloc::boxed::Box;
-use core::marker::PhantomData;
-
 use alloc::collections::BTreeSet;
+use core::marker::PhantomData;
+use core::sync::atomic::Ordering;
 
 #[cfg(feature = "std")]
 const SYNC_TIME_PERIOD: u64 = std::time::Duration::from_nanos(2000000000).as_nanos() as u64;
@@ -36,7 +36,7 @@ loom::lazy_static! {
 trait WithMut<T> {
     fn with_mut<R>(&mut self, f: impl FnOnce(&mut *mut T) -> R) -> R;
 }
-impl<T> WithMut<T> for crate::sync::atomic::AtomicPtr<T> {
+impl<T> WithMut<T> for core::sync::atomic::AtomicPtr<T> {
     fn with_mut<R>(&mut self, f: impl FnOnce(&mut *mut T) -> R) -> R {
         f(self.get_mut())
     }
@@ -333,23 +333,21 @@ impl<F> Domain<F> {
 
     #[cfg(feature = "std")]
     fn check_due_time(&self) -> isize {
+        let time = Self::now();
+        let due = self.due_time.load(Ordering::Acquire);
+        if time < due
+            || self
+                .due_time
+                .compare_exchange(
+                    due,
+                    time + SYNC_TIME_PERIOD,
+                    Ordering::AcqRel,
+                    Ordering::Relaxed,
+                )
+                .is_err()
         {
-            let time = Self::now();
-            let due = self.due_time.load(Ordering::Acquire);
-            if time < due
-                || self
-                    .due_time
-                    .compare_exchange(
-                        due,
-                        time + SYNC_TIME_PERIOD,
-                        Ordering::AcqRel,
-                        Ordering::Relaxed,
-                    )
-                    .is_err()
-            {
-                // Not yet due, or someone else noticed we were due already.
-                return 0;
-            }
+            // Not yet due, or someone else noticed we were due already.
+            return 0;
         }
         self.count.swap(0, Ordering::AcqRel)
     }
@@ -357,17 +355,16 @@ impl<F> Domain<F> {
     fn check_threshold_and_reclaim(&self) -> usize {
         let mut rcount = self.check_count_threshold();
         if rcount == 0 {
-
             #[cfg(feature = "std")]
             {
-                //TODO: Implement some kind of mock time for no_std.
-                //Currently we reclaim only based on rcount on no_std
+                // TODO: Implement some kind of mock time for no_std.
+                // Currently we reclaim only based on rcount on no_std
                 rcount = self.check_due_time();
                 if rcount == 0 {
                     return 0;
                 }
             }
-            //Nothing to reclaim on no_std
+            // Nothing to reclaim on no_std
             #[cfg(not(feature = "std"))]
             return 0;
         }

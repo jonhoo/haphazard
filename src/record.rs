@@ -1,4 +1,5 @@
-use crate::sync::atomic::{AtomicPtr, Ordering};
+use crate::sync::atomic::AtomicPtr;
+use core::sync::atomic::Ordering;
 
 pub(crate) struct HazPtrRecord {
     pub(crate) ptr: AtomicPtr<u8>,

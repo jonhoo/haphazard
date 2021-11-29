@@ -15,7 +15,7 @@ mod sync;
 fn asymmetric_light_barrier() {
     // TODO: if cfg!(linux) {
     // https://github.com/facebook/folly/blob/bd600cd4e88f664f285489c76b6ad835d8367cd2/folly/portability/Asm.h#L28
-    crate::sync::atomic::fence(crate::sync::atomic::Ordering::SeqCst);
+    crate::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
 }
 
 enum HeavyBarrierKind {
@@ -25,11 +25,10 @@ enum HeavyBarrierKind {
 fn asymmetric_heavy_barrier(_: HeavyBarrierKind) {
     // TODO: if cfg!(linux) {
     // https://github.com/facebook/folly/blob/bd600cd4e88f664f285489c76b6ad835d8367cd2/folly/synchronization/AsymmetricMemoryBarrier.cpp#L84
-    crate::sync::atomic::fence(crate::sync::atomic::Ordering::SeqCst);
+    crate::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
 }
 
 pub use domain::Global;
-
 pub use deleter::{deleters, Deleter, Reclaim};
 pub use domain::Domain;
 pub use holder::HazardPointer;

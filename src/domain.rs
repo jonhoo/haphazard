@@ -317,16 +317,18 @@ impl<F> Domain<F> {
     }
 
     fn check_count_threshold(&self) -> isize {
-        let rcount = self.count.load(Ordering::Acquire);
+        let mut rcount = self.count.load(Ordering::Acquire);
         while rcount > self.threshold() {
-            if self
+            match self
                 .count
                 .compare_exchange_weak(rcount, 0, Ordering::AcqRel, Ordering::Relaxed)
-                .is_ok()
             {
-                self.due_time
-                    .store(Self::now() + SYNC_TIME_PERIOD, Ordering::Release);
-                return rcount;
+                Ok(_) => {
+                    self.due_time
+                        .store(Self::now() + SYNC_TIME_PERIOD, Ordering::Release);
+                    return rcount;
+                }
+                Err(rcount_now) => rcount = rcount_now,
             }
         }
         0

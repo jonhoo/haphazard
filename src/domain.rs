@@ -48,6 +48,8 @@ pub struct Domain<F> {
     nbulk_reclaims: AtomicUsize,
     count: AtomicIsize,
     shutdown: bool,
+    #[cfg(all(not(loom), not(feature = "std")))]
+    shard_hash_state: AtomicUsize,
 }
 
 impl Domain<Global> {
@@ -89,9 +91,16 @@ macro_rules! new {
                 nbulk_reclaims: AtomicUsize::new(0),
                 family: PhantomData,
                 shutdown: false,
+                #[cfg(not(feature = "std"))]
+                shard_hash_state: AtomicUsize::new(0),
             }
         }
     };
+}
+
+#[cfg(all(not(loom), feature = "std"))]
+thread_local! {
+    static SHARD_STATE: AtomicUsize = AtomicUsize::new(0);
 }
 
 impl<F> Domain<F> {
@@ -306,7 +315,7 @@ impl<F> Domain<F> {
         crate::asymmetric_light_barrier();
 
         let retired = Box::into_raw(retired);
-        unsafe { self.untagged[Self::calc_shard(retired)].push(retired, retired) };
+        unsafe { self.untagged[self.calc_shard(retired)].push(retired, retired) };
         self.count.fetch_add(1, Ordering::Release);
 
         self.check_threshold_and_reclaim()
@@ -555,13 +564,57 @@ impl<F> Domain<F> {
         }
     }
 
-    #[cfg(not(loom))]
-    fn calc_shard(input: *mut Retired) -> usize {
+    #[cfg(all(not(loom), feature = "multiply_hash"))]
+    fn calc_shard(&self, input: *mut Retired) -> usize {
+        #[cfg(target_pointer_width = "64")]
+        const LARGE_PRIME: usize = 4445950232728569541;
+        #[cfg(target_pointer_width = "64")]
+        type MulType = u128;
+
+        #[cfg(target_pointer_width = "32")]
+        const LARGE_PRIME: usize = 4294908193;
+        #[cfg(target_pointer_width = "32")]
+        type MulType = u64;
+
+        #[cfg(target_pointer_width = "16")]
+        const LARGE_PRIME: usize = 63113;
+        #[cfg(target_pointer_width = "16")]
+        type MulType = u32;
+
+        const USIZE_BYTES: usize = std::mem::size_of::<usize>();
+
+        #[cfg(not(feature = "std"))]
+        let state = self.shard_hash_state.load(Ordering::Relaxed);
+        #[cfg(feature = "std")]
+        let state = SHARD_STATE.with(|v| v.load(Ordering::Relaxed));
+
+        let input = input as usize ^ state;
+
+        //Use `widening_mul` once https://github.com/rust-lang/rust/issues/85532 is stabilized
+        let mul_result = (input as MulType * LARGE_PRIME as MulType).to_ne_bytes();
+
+        //XXX: Could be made simpler without the slice stuff using mem::transmute
+        let mut hash = [0u8; USIZE_BYTES];
+        hash.copy_from_slice(&mul_result[0..USIZE_BYTES]);
+
+        let mut new_state = [0u8; USIZE_BYTES];
+        new_state.copy_from_slice(&mul_result[USIZE_BYTES..(2 * USIZE_BYTES)]);
+
+        #[cfg(not(feature = "std"))]
+        self.shard_hash_state.store(usize::from_ne_bytes(new_state), Ordering::Relaxed);
+        #[cfg(feature = "std")]
+        SHARD_STATE.with(|v| v.store(usize::from_ne_bytes(new_state), Ordering::Relaxed));
+
+        usize::from_ne_bytes(hash) as usize & SHARD_MASK
+    }
+
+    #[cfg(all(not(loom), not(feature = "multiply_hash")))]
+    fn calc_shard(&self, input: *mut Retired) -> usize {
         (input as usize >> IGNORED_LOW_BITS) & SHARD_MASK
     }
 
     #[cfg(loom)]
-    fn calc_shard(_input: *mut Retired) -> usize {
+    fn calc_shard(&self, _input: *mut Retired) -> usize {
         SHARD.fetch_add(1, Ordering::Relaxed) & SHARD_MASK
     }
 }

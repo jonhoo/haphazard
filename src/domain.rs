@@ -357,18 +357,15 @@ impl<F> Domain<F> {
     fn check_threshold_and_reclaim(&self) -> usize {
         let mut rcount = self.check_count_threshold();
         if rcount == 0 {
+            // TODO: Implement some kind of mock time for no_std.
+            // Currently we reclaim only based on rcount on no_std
             #[cfg(feature = "std")]
             {
-                // TODO: Implement some kind of mock time for no_std.
-                // Currently we reclaim only based on rcount on no_std
                 rcount = self.check_due_time();
-                if rcount == 0 {
-                    return 0;
-                }
             }
-            // Nothing to reclaim on no_std
-            #[cfg(not(feature = "std"))]
-            return 0;
+            if rcount == 0 {
+                return 0;
+            }
         }
 
         self.nbulk_reclaims.fetch_add(1, Ordering::Acquire);

@@ -177,8 +177,8 @@ impl<F> Domain<F> {
                     debug_assert!(n <= N);
                     return (rec, n);
                 } else {
-                    #[cfg(feature = "std")]
-                    std::thread::yield_now();
+                    #[cfg(any(loom, feature = "std"))]
+                    crate::sync::yield_now();
                 }
             }
         }
@@ -241,8 +241,8 @@ impl<F> Domain<F> {
                     break;
                 }
             } else {
-                #[cfg(feature = "std")]
-                std::thread::yield_now();
+                #[cfg(any(loom, feature = "std"))]
+                crate::sync::yield_now();
             }
         }
     }
@@ -355,10 +355,12 @@ impl<F> Domain<F> {
     }
 
     fn check_threshold_and_reclaim(&self) -> usize {
+        #[allow(unused_mut)]
         let mut rcount = self.check_count_threshold();
         if rcount == 0 {
             // TODO: Implement some kind of mock time for no_std.
             // Currently we reclaim only based on rcount on no_std
+            // (also the reason for allow unused_mut)
             #[cfg(feature = "std")]
             {
                 rcount = self.check_due_time();

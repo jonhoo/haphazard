@@ -177,7 +177,8 @@ impl<F> Domain<F> {
                     debug_assert!(n <= N);
                     return (rec, n);
                 } else {
-                    crate::sync::yield_now();
+                    #[cfg(feature = "std")]
+                    std::thread::yield_now();
                 }
             }
         }
@@ -240,7 +241,8 @@ impl<F> Domain<F> {
                     break;
                 }
             } else {
-                crate::sync::yield_now();
+                #[cfg(feature = "std")]
+                std::thread::yield_now();
             }
         }
     }
@@ -413,7 +415,6 @@ impl<F> Domain<F> {
                 self.count.fetch_add(rcount, Ordering::Release);
             }
             rcount = self.check_count_threshold();
-
             if rcount == 0 && done {
                 break;
             }

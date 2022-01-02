@@ -182,6 +182,8 @@ impl<F> Domain<F> {
                     debug_assert!(n <= N);
                     return (rec, n);
                 } else {
+                    #[cfg(not(any(loom, feature = "std")))]
+                    core::hint::spin_loop();
                     #[cfg(any(loom, feature = "std"))]
                     crate::sync::yield_now();
                 }
@@ -246,6 +248,8 @@ impl<F> Domain<F> {
                     break;
                 }
             } else {
+                #[cfg(not(any(loom, feature = "std")))]
+                core::hint::spin_loop();
                 #[cfg(any(loom, feature = "std"))]
                 crate::sync::yield_now();
             }

@@ -1,6 +1,74 @@
 use crate::sync::atomic::AtomicPtr;
 use crate::{Domain, HazPtrObject, HazPtrRecord};
 use core::sync::atomic::Ordering;
+use core::mem::{ManuallyDrop, MaybeUninit};
+
+pub struct HazardPointerArray<'domain, F, const N: usize> {
+    // ManuallyDrop is required to prevent the HazardPointer from reclaiming itself, since
+    // HazardPointerArray has it's own drop implementation with an optimized reclaim for all hazard
+    // pointers
+    haz_ptrs: [ManuallyDrop<HazardPointer<'domain, F>>; N],
+}
+
+impl<'domain, F, const N: usize> HazardPointerArray<'domain, F, N> {
+    pub fn hazard_pointers<'array>(&'array mut self) -> [&'array mut HazardPointer<'domain, F>; N] {
+        // replace with `self.haz_ptrs.each_mut().map(|v| &mut **v)` when each_mut stabilizes
+
+        let mut out: [MaybeUninit<&'array mut HazardPointer<'domain, F>>; N] =
+            [(); N].map(|_| MaybeUninit::uninit());
+
+        for (i, hazptr) in self.haz_ptrs.iter_mut().enumerate() {
+            out[i].write(hazptr);
+        }
+
+        //
+        // # Safety
+        //
+        // We have initialized every element of the array with our for loop above
+        out.map(|maybe_uninit| unsafe { maybe_uninit.assume_init() })
+    }
+
+    ///
+    /// # Safety
+    ///
+    /// Caller must guarantee that the address in `AtomicPtr` is valid as a reference, or null.
+    /// Caller must also guarantee that the value behind the `AtomicPtr` will only be deallocated
+    /// through calls to [`HazPtrObject::retire`] on the same [`Domain`] as this holder is
+    /// associated with.
+    pub unsafe fn protect_all<'l, 'o, T>(
+        &'l mut self,
+        mut sources: [&'_ AtomicPtr<T>; N],
+    ) -> [Option<&'l T>; N]
+    where
+        T: HazPtrObject<'o, F>,
+        'o: 'l,
+        F: 'static,
+    {
+        let mut out = [None; N];
+
+        for (i, (hazptr, src)) in self.haz_ptrs.iter_mut().zip(&mut sources).enumerate() {
+            out[i] = unsafe { hazptr.protect(src) };
+        }
+
+        out
+    }
+
+    pub fn reset_protection(&mut self) {
+        for hazptr in self.haz_ptrs.iter_mut() {
+            hazptr.reset_protection();
+        }
+    }
+}
+
+impl<'domain, F, const N: usize> Drop for HazardPointerArray<'domain, F, N> {
+    fn drop(&mut self) {
+        self.reset_protection();
+        let domain = self.haz_ptrs[0].domain;
+        // replace with `self.haz_ptrs.each_ref().map(|v| v.hazard)` when each_ref stabilizes
+        let records = self.hazard_pointers().map(|hazptr| hazptr.hazard);
+        domain.release_many(records);
+    }
+}
 
 pub struct HazardPointer<'domain, F> {
     hazard: &'domain HazPtrRecord,
@@ -11,6 +79,10 @@ impl HazardPointer<'static, crate::Global> {
     pub fn make_global() -> Self {
         HazardPointer::make_in_domain(Domain::global())
     }
+
+    pub fn make_many_global<const N: usize>() -> HazardPointerArray<'static, crate::Global, N> {
+        HazardPointer::make_many_in_domain(Domain::global())
+    }
 }
 
 impl<'domain, F> HazardPointer<'domain, F> {
@@ -19,6 +91,16 @@ impl<'domain, F> HazardPointer<'domain, F> {
             hazard: domain.acquire(),
             domain,
         }
+    }
+
+    pub fn make_many_in_domain<const N: usize>(
+        domain: &'domain Domain<F>,
+    ) -> HazardPointerArray<'domain, F, N> {
+        let haz_ptrs = domain
+            .acquire_many::<N>()
+            .map(|hazard| ManuallyDrop::new(HazardPointer { hazard, domain }));
+
+        HazardPointerArray { haz_ptrs }
     }
 
     ///

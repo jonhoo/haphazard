@@ -12,6 +12,68 @@ impl Drop for CountDrops {
 }
 
 #[test]
+fn acquires_multiple() {
+    let drops_42 = Arc::new(AtomicUsize::new(0));
+
+    let domain = Domain::new(&());
+
+    let x = AtomicPtr::new(Box::into_raw(Box::new(HazPtrObjectWrapper::with_domain(
+        &domain,
+        (42, CountDrops(Arc::clone(&drops_42))),
+    ))));
+    let y = AtomicPtr::new(Box::into_raw(Box::new(HazPtrObjectWrapper::with_domain(
+        &domain,
+        (42, CountDrops(Arc::clone(&drops_42))),
+    ))));
+
+    // As a reader:
+    let mut hazptr_array = HazardPointer::make_many_in_domain(&domain);
+
+    // Safety:
+    //
+    //  1. AtomicPtr points to a Box, so is always valid.
+    //  2. Writers to AtomicPtr use HazPtrObject::retire.
+    let [one, two] = hazptr_array.hazard_pointers();
+    let my_x = unsafe { one.protect(&x) }.expect("not null");
+    let my_y = unsafe { two.protect(&y) }.expect("not null");
+
+    // valid:
+    assert_eq!(my_x.0, 42);
+    assert_eq!(my_y.0, 42);
+
+    hazptr_array.reset_protection();
+    // invalid:
+    // let _: i32 = my_x.0;
+    // let _: i32 = my_y.0;
+
+    let [my_x, my_y] = unsafe { hazptr_array.protect_all([&x, &y]) };
+
+    let my_x = my_x.expect("not null");
+    let my_y = my_y.expect("not null");
+
+    // valid:
+    assert_eq!(my_x.0, 42);
+    assert_eq!(my_y.0, 42);
+
+    drop(hazptr_array);
+    // invalid:
+    // let _: i32 = my_y.0;
+    // invalid:
+    // let _: i32 = my_y.0;
+
+    domain.eager_reclaim();
+    assert_eq!(drops_42.load(Ordering::SeqCst), 0);
+
+    unsafe { x.into_inner().retire(&deleters::drop_box) };
+    domain.eager_reclaim();
+    assert_eq!(drops_42.load(Ordering::SeqCst), 1);
+
+    unsafe { y.into_inner().retire(&deleters::drop_box) };
+    domain.eager_reclaim();
+    assert_eq!(drops_42.load(Ordering::SeqCst), 2);
+}
+
+#[test]
 fn feels_good() {
     let drops_42 = Arc::new(AtomicUsize::new(0));
 

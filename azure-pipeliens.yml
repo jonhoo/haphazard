@@ -1,5 +1,5 @@
 jobs:
- - template: default.yml@templates
+ - template: nightly-only.yml@templates
    parameters:
      minrust: 1.56.0
      nightly: true
@@ -24,4 +24,4 @@ resources:
       type: github
       name: crate-ci/azure-pipelines
       ref: refs/heads/v0.4
-      endpoint: jonhoo
+      endpoint: TroyNeubauer

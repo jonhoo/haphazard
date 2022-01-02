@@ -333,8 +333,12 @@ impl<F> Domain<F> {
                 .compare_exchange_weak(rcount, 0, Ordering::AcqRel, Ordering::Relaxed)
             {
                 Ok(_) => {
-                    self.due_time
-                        .store(Self::now() + SYNC_TIME_PERIOD, Ordering::Release);
+                    #[cfg(feature = "std")]
+                    {
+                        //We don't check `due_time` on no_std, so dont bother setting it
+                        self.due_time
+                            .store(Self::now() + SYNC_TIME_PERIOD, Ordering::Release);
+                    }
                     return rcount;
                 }
                 Err(rcount_now) => rcount = rcount_now,
@@ -698,7 +702,7 @@ fn foo() {
 */
 
 /// ```compile_fail
-/// use std::sync::atomic::AtomicPtr;
+/// use core::sync::atomic::AtomicPtr;
 /// use haphazard::*;
 /// let dw = Domain::global();
 /// let dr = Domain::new(&());
@@ -715,7 +719,7 @@ fn foo() {
 struct CannotConfuseGlobalWriter;
 
 /// ```compile_fail
-/// use std::sync::atomic::AtomicPtr;
+/// use core::sync::atomic::AtomicPtr;
 /// use haphazard::*;
 /// let dw = Domain::new(&());
 /// let dr = Domain::global();
@@ -732,7 +736,7 @@ struct CannotConfuseGlobalWriter;
 struct CannotConfuseGlobalReader;
 
 /// ```compile_fail
-/// use std::sync::atomic::AtomicPtr;
+/// use core::sync::atomic::AtomicPtr;
 /// use haphazard::*;
 /// let dw = unique_domain!();
 /// let dr = unique_domain!();
@@ -751,7 +755,7 @@ struct CannotConfuseAcrossFamilies;
 #[cfg(test)]
 mod tests {
     use super::Domain;
-    use std::{ptr::null_mut, sync::atomic::Ordering};
+    use core::{ptr::null_mut, sync::atomic::Ordering};
 
     #[test]
     fn acquire_many_skips_used_nodes() {
@@ -768,7 +772,7 @@ mod tests {
             rec2.next.load(Ordering::Relaxed),
             rec1 as *const _ as *mut _
         );
-        assert_eq!(rec1.next.load(Ordering::Relaxed), std::ptr::null_mut());
+        assert_eq!(rec1.next.load(Ordering::Relaxed), core::ptr::null_mut());
         domain.release(rec1);
         domain.release(rec3);
         drop(rec1);
@@ -786,7 +790,7 @@ mod tests {
         );
         assert_eq!(
             three.available_next.load(Ordering::Relaxed),
-            std::ptr::null_mut(),
+            core::ptr::null_mut(),
         );
 
         // one was previously rec3
@@ -823,7 +827,7 @@ mod tests {
         );
         assert_eq!(
             two.available_next.load(Ordering::Relaxed),
-            std::ptr::null_mut(),
+            core::ptr::null_mut(),
         );
 
         assert_eq!(two.next.load(Ordering::Relaxed), one as *const _ as *mut _);
@@ -838,7 +842,7 @@ mod tests {
         let rec3 = domain.acquire();
 
         // rec3 -> rec2 -> rec1
-        assert_eq!(rec1.next.load(Ordering::Relaxed), std::ptr::null_mut(),);
+        assert_eq!(rec1.next.load(Ordering::Relaxed), core::ptr::null_mut(),);
         assert_eq!(
             rec2.next.load(Ordering::Relaxed),
             rec1 as *const _ as *mut _
@@ -881,7 +885,7 @@ mod tests {
         );
         assert_eq!(
             five.available_next.load(Ordering::Relaxed),
-            std::ptr::null_mut(),
+            core::ptr::null_mut(),
         );
 
         assert_eq!(

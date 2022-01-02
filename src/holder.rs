@@ -1,7 +1,7 @@
 use crate::sync::atomic::AtomicPtr;
 use crate::{Domain, HazPtrObject, HazPtrRecord};
-use core::sync::atomic::Ordering;
 use core::mem::{ManuallyDrop, MaybeUninit};
+use core::sync::atomic::Ordering;
 
 pub struct HazardPointerArray<'domain, F, const N: usize> {
     // ManuallyDrop is required to prevent the HazardPointer from reclaiming itself, since

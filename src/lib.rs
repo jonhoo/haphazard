@@ -28,9 +28,9 @@ fn asymmetric_heavy_barrier(_: HeavyBarrierKind) {
     crate::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
 }
 
-pub use domain::Global;
 pub use deleter::{deleters, Deleter, Reclaim};
 pub use domain::Domain;
+pub use domain::Global;
 pub use holder::HazardPointer;
 pub use object::{HazPtrObject, HazPtrObjectWrapper};
 

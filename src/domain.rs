@@ -335,7 +335,7 @@ impl<F> Domain<F> {
                 Ok(_) => {
                     #[cfg(feature = "std")]
                     {
-                        //We don't check `due_time` on no_std, so dont bother setting it
+                        // We don't check `due_time` with no_std, so no need to set it either
                         self.due_time
                             .store(Self::now() + SYNC_TIME_PERIOD, Ordering::Release);
                     }

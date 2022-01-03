@@ -16,10 +16,11 @@ impl Deleter for unsafe fn(*mut (dyn Reclaim + 'static)) {
 
 pub mod deleters {
     use super::Reclaim;
+    use alloc::boxed::Box;
 
     unsafe fn _drop_in_place(ptr: *mut dyn Reclaim) {
         // Safe by the contract on HazPtrObject::retire.
-        unsafe { std::ptr::drop_in_place(ptr) };
+        unsafe { core::ptr::drop_in_place(ptr) };
     }
 
     /// Always safe to use given requirements on HazPtrObject::retire,

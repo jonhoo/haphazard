@@ -7,7 +7,17 @@ jobs:
    parameters:
      token: $(CODECOV_TOKEN_SECRET)
      nightly: true
-
+ - job: no_std
+   displayName: "Compile-check on no_std target"
+   pool:
+     vmImage: ubuntu-16.04
+   steps:
+     - template: install-rust.yml@templates
+       parameters:
+         targets:
+          - thumbv7m-none-eabi
+     - bash: cargo check --target thumbv7m-none-eabi --no-default-features
+       displayName: cargo check
 resources:
   repositories:
     - repository: templates

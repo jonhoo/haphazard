@@ -1,4 +1,4 @@
-#![feature(arbitrary_self_types)]
+//#![feature(arbitrary_self_types)]
 #![deny(unsafe_op_in_unsafe_fn)]
 #![allow(dead_code)]
 #![cfg_attr(not(feature = "std"), no_std)]

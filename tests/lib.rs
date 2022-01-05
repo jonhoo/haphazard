@@ -64,11 +64,11 @@ fn acquires_multiple() {
     domain.eager_reclaim();
     assert_eq!(drops_42.load(Ordering::SeqCst), 0);
 
-    unsafe { x.into_inner().retire(&deleters::drop_box) };
+    unsafe { HazPtrObjectWrapper::retire(x.into_inner(), &deleters::drop_box) };
     domain.eager_reclaim();
     assert_eq!(drops_42.load(Ordering::SeqCst), 1);
 
-    unsafe { y.into_inner().retire(&deleters::drop_box) };
+    unsafe { HazPtrObjectWrapper::retire(y.into_inner(), &deleters::drop_box) };
     domain.eager_reclaim();
     assert_eq!(drops_42.load(Ordering::SeqCst), 2);
 }
@@ -130,7 +130,7 @@ fn feels_good() {
     //  1. The pointer came from Box, so is valid.
     //  2. The old value is no longer accessible.
     //  3. The deleter is valid for Box types.
-    unsafe { old.retire(&deleters::drop_box) };
+    unsafe { HazPtrObjectWrapper::retire(old, &deleters::drop_box) };
 
     assert_eq!(drops_42.load(Ordering::SeqCst), 0);
     assert_eq!(my_x.0, 42);
@@ -207,7 +207,7 @@ fn drop_domain() {
     assert_eq!(drops_42.load(Ordering::SeqCst), 0);
     assert_eq!(my_x.0, 42);
 
-    unsafe { old.retire(&deleters::drop_box) };
+    unsafe { HazPtrObjectWrapper::retire(old, &deleters::drop_box) };
 
     assert_eq!(drops_42.load(Ordering::SeqCst), 0);
     assert_eq!(my_x.0, 42);

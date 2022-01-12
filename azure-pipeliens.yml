@@ -47,6 +47,15 @@ jobs:
        displayName: cargo miri test
        env:
          MIRIFLAGS: -Zmiri-ignore-leaks
+ - job: loom
+   displayName: "Run loom on test suite"
+   pool:
+     vmImage: ubuntu-latest
+   steps:
+     - template: install-rust.yml@templates
+       parameters:
+     - script: RUSTFLAGS="--cfg loom" cargo test --release --test loom
+       displayName: cargo test --test loom
  - job: asan
    displayName: "Run address sanitizer on test suite"
    pool:

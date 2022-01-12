@@ -18,6 +18,8 @@ jobs:
           - aarch64-unknown-none
      - bash: cargo check --target aarch64-unknown-none --no-default-features
        displayName: cargo check
+     - bash: ! cargo check --target aarch64-unknown-none
+       displayName: Compilation fails with (default feature) std enabled
  - job: clippy 
    displayName: "Clippy warnings"
    pool:

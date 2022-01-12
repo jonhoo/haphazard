@@ -18,19 +18,7 @@ jobs:
        displayName: cargo check
      - script: |
         ! cargo check --target aarch64-unknown-none
-       displayName: Compilation fails with (default feature) std enabled
- - job: clippy 
-   displayName: "Clippy warnings"
-   pool:
-     vmImage: ubuntu-latest
-   steps:
-     - template: install-rust.yml@templates
-       parameters:
-         rust: beta
-         components:
-           - clippy
-     - bash: cargo clippy --all-features -- -D warnings
-       displayName: cargo clippy -- -D warnings
+       displayName: Compilation fails with (default feature) std enabled 
  - job: miri
    displayName: "Run miri on test suite"
    pool:
@@ -70,11 +58,11 @@ jobs:
      # only --lib --tests b/c of https://github.com/rust-lang/rust/issues/53945
      - script: |
            env ASAN_OPTIONS="detect_odr_violation=0:detect_leaks=0" RUSTFLAGS="-Z sanitizer=address" cargo test --lib --tests --all-features --target x86_64-unknown-linux-gnu
-       displayName: cargo -Z sanitizer=address test 
+       displayName: cargo -Z sanitizer=address test
 resources:
   repositories:
     - repository: templates
       type: github
       name: crate-ci/azure-pipelines
       ref: refs/heads/v0.4
-      endpoint: TroyNeubauer
+      endpoint: jonhoo 

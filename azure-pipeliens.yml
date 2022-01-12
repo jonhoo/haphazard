@@ -20,7 +20,6 @@ jobs:
        displayName: cargo check
  - job: clippy 
    displayName: "Clippy warnings"
-   dependsOn: deny
    pool:
      vmImage: ubuntu-latest
    steps:

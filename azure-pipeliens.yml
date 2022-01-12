@@ -18,6 +18,68 @@ jobs:
           - aarch64-unknown-none
      - bash: cargo check --target aarch64-unknown-none --no-default-features
        displayName: cargo check
+ - job: clippy 
+   displayName: "Clippy warnings"
+   dependsOn: deny
+   pool:
+     vmImage: ubuntu-latest
+   steps:
+     - template: install-rust.yml@templates
+       parameters:
+         rust: beta
+         components:
+           - clippy
+     - bash: cargo clippy --all-features -- -D warnings
+       displayName: cargo clippy -- -D warnings
+ - job: miri
+   displayName: "Run miri on test suite"
+   pool:
+     vmImage: ubuntu-latest
+   steps:
+     - bash: |
+         echo '##vso[task.setvariable variable=nightly]nightly-'$(curl -s https://rust-lang.github.io/rustup-components-history/x86_64-unknown-linux-gnu/miri)
+       displayName: "Determine latest miri nightly"
+     - template: install-rust.yml@templates
+       parameters:
+         rust: $(nightly)
+         components:
+           - miri
+     - script: cargo miri test
+       displayName: cargo miri test
+       env:
+         MIRIFLAGS: -Zmiri-ignore-leaks
+ - job: asan
+   displayName: "Run address sanitizer on test suite"
+   pool:
+     vmImage: ubuntu-latest
+   steps:
+     - template: install-rust.yml@templates
+       parameters:
+         rust: nightly
+     - bash: |
+           sudo ln -s /usr/bin/llvm-symbolizer-6.0 /usr/bin/llvm-symbolizer
+       displayName: Enable debug symbols
+     # only --lib --tests b/c of https://github.com/rust-lang/rust/issues/53945
+     - script: |
+           env ASAN_OPTIONS="detect_odr_violation=0" RUSTFLAGS="-Z sanitizer=address" cargo test --lib --tests --all-features --target x86_64-unknown-linux-gnu
+       displayName: cargo -Z sanitizer=address test
+ - job: lsan
+   displayName: "Run leak sanitizer on test suite"
+   pool:
+     vmImage: ubuntu-latest
+   steps:
+     - template: install-rust.yml@templates
+       parameters:
+         rust: nightly
+     - bash: |
+           sudo ln -s /usr/bin/llvm-symbolizer-6.0 /usr/bin/llvm-symbolizer
+           sed -i '/\[features\]/i [profile.dev]' Cargo.toml
+           sed -i '/profile.dev/a opt-level = 1' Cargo.toml
+           cat Cargo.toml
+       displayName: Enable debug symbols
+     - script: |
+           env RUSTFLAGS="-Z sanitizer=leak" cargo test --all-features --target x86_64-unknown-linux-gnu
+       displayName: cargo -Z sanitizer=leak test
 resources:
   repositories:
     - repository: templates

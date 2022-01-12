@@ -47,6 +47,7 @@ pub struct Domain<F> {
     hazptrs: HazPtrRecords,
     untagged: [RetiredList; NUM_SHARDS],
     family: PhantomData<F>,
+    #[cfg(feature = "std")]
     due_time: AtomicU64,
     nbulk_reclaims: AtomicUsize,
     count: AtomicIsize,
@@ -88,6 +89,7 @@ macro_rules! new {
                 },
                 untagged,
                 count: AtomicIsize::new(0),
+                #[cfg(feature = "std")]
                 due_time: AtomicU64::new(0),
                 nbulk_reclaims: AtomicUsize::new(0),
                 family: PhantomData,
@@ -335,7 +337,6 @@ impl<F> Domain<F> {
                 Ok(_) => {
                     #[cfg(feature = "std")]
                     {
-                        //We don't check `due_time` on no_std, so dont bother setting it
                         self.due_time
                             .store(Self::now() + SYNC_TIME_PERIOD, Ordering::Release);
                     }
@@ -375,7 +376,7 @@ impl<F> Domain<F> {
             // TODO: Implement some kind of mock time for no_std.
             // Currently we reclaim only based on rcount on no_std
             // (also the reason for allow unused_mut)
-            #[cfg(feature = "std")]
+            #[cfg(all(feature = "std", not(miri)))]
             {
                 rcount = self.check_due_time();
             }

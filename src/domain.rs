@@ -5,7 +5,7 @@ use alloc::collections::BTreeSet;
 use core::marker::PhantomData;
 use core::sync::atomic::Ordering;
 
-#[cfg(feature = "std")]
+#[cfg(all(feature = "std", not(miri)))]
 const SYNC_TIME_PERIOD: u64 = std::time::Duration::from_nanos(2000000000).as_nanos() as u64;
 
 const RCOUNT_THRESHOLD: isize = 1000;
@@ -47,7 +47,7 @@ pub struct Domain<F> {
     hazptrs: HazPtrRecords,
     untagged: [RetiredList; NUM_SHARDS],
     family: PhantomData<F>,
-    #[cfg(feature = "std")]
+    #[cfg(all(feature = "std", not(miri)))]
     due_time: AtomicU64,
     nbulk_reclaims: AtomicUsize,
     count: AtomicIsize,
@@ -89,7 +89,7 @@ macro_rules! new {
                 },
                 untagged,
                 count: AtomicIsize::new(0),
-                #[cfg(feature = "std")]
+                #[cfg(all(feature = "std", not(miri)))]
                 due_time: AtomicU64::new(0),
                 nbulk_reclaims: AtomicUsize::new(0),
                 family: PhantomData,
@@ -335,7 +335,7 @@ impl<F> Domain<F> {
                 .compare_exchange_weak(rcount, 0, Ordering::AcqRel, Ordering::Relaxed)
             {
                 Ok(_) => {
-                    #[cfg(feature = "std")]
+                    #[cfg(all(feature = "std", not(miri)))]
                     {
                         self.due_time
                             .store(Self::now() + SYNC_TIME_PERIOD, Ordering::Release);
@@ -348,7 +348,7 @@ impl<F> Domain<F> {
         0
     }
 
-    #[cfg(feature = "std")]
+    #[cfg(all(feature = "std", not(miri)))]
     fn check_due_time(&self) -> isize {
         let time = Self::now();
         let due = self.due_time.load(Ordering::Acquire);

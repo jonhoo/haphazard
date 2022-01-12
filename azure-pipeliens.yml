@@ -1,12 +1,10 @@
 jobs:
- - template: nightly-only.yml@templates
+ - template: default.yml@templates
    parameters:
      minrust: 1.56.0
-     nightly: true
  - template: coverage.yml@templates
    parameters:
      token: $(CODECOV_TOKEN_SECRET)
-     nightly: true
  - job: no_std
    displayName: "Compile-check on no_std target"
    pool:

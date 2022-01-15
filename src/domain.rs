@@ -75,6 +75,13 @@ macro_rules! unique_domain {
 // Macro to make new const only when not in loom.
 macro_rules! new {
     ($($decl:tt)*) => {
+        /// Construct a new domain with the given family type.
+        ///
+        /// The type checker protects you from accidentally using a `HazardPointer` from one domain
+        /// _family_ (the type `F`) with an object protected by a domain in a different family.
+        /// However, it does _not_ protect you from mixing up domains with the same family type.
+        /// Therefore, prefer creating domains with `unique_domain!` where possible, since it
+        /// guarantees a unique `F` for every domain.
         pub $($decl)*(_: &F) -> Self {
             // https://blog.rust-lang.org/2021/02/11/Rust-1.50.0.html#const-value-repetition-for-arrays
             #[cfg(not(loom))]

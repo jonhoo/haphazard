@@ -1,10 +1,14 @@
 use crate::{Deleter, Domain, Reclaim};
 use core::ops::{Deref, DerefMut};
 
+// XXX: If this trait is implemented "for any F" for an object, protection goes away.
 pub trait HazPtrObject<'domain, F: 'static>
 where
     Self: Sized + 'domain,
 {
+    // XXX: This should probably go away -- we don't want to require that each object has a ptr to
+    // domain. Better if data structure can keep pointer once and supply to retire. But that also
+    // means we have no way in the reader to check that the domain is the right one.
     fn domain(&self) -> &'domain Domain<F>;
 
     /// # Safety
@@ -22,6 +26,16 @@ where
     }
 }
 
+// XXX: Idea!
+//
+// What if this contains AtomicPtr<*mut T> where *mut is Box::from_raw
+// and argument to constructors is Box<T>?
+// And maybe rename this to Atomic?
+//
+// Will make for nicer(?) API.
+//
+// Then the question is: should it be Clone? should it be Copy? copy_and_move test.
+// If we implement Clone, we must have double-retire protection.
 pub struct HazPtrObjectWrapper<'domain, T, F> {
     inner: T,
     domain: &'domain Domain<F>,

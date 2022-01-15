@@ -182,6 +182,14 @@ impl<'domain, F> HazardPointer<'domain, F> {
     pub fn reset_protection(&mut self) {
         self.hazard.reset();
     }
+
+    pub unsafe fn protect_raw<'o, T>(&mut self, src: *mut T)
+    where
+        T: HazPtrObject<'o, F>,
+        F: 'static,
+    {
+        self.hazard.protect(src as *mut u8);
+    }
 }
 
 impl<F> Drop for HazardPointer<'_, F> {

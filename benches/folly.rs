@@ -21,7 +21,7 @@ macro_rules! folly_bench {
                                     std::thread::spawn(move || {
                                         barrier.wait();
                                         barrier.wait();
-                                        for _ in 0..niters {
+                                        for _ in 0..(niters / nthreads as u64) {
                                             $iter
                                         }
                                     })

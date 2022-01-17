@@ -2,7 +2,10 @@
 
 use haphazard::*;
 
-use loom::sync::atomic::AtomicPtr;
+use loom::sync::{
+    atomic::{AtomicPtr, AtomicUsize},
+    Mutex,
+};
 use loom::thread;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -20,6 +23,64 @@ impl CountDrops {
 impl Drop for CountDrops {
     fn drop(&mut self) {
         self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+#[derive(Default, Debug)]
+struct Count {
+    ctors: std::sync::atomic::AtomicUsize,
+    dtors: std::sync::atomic::AtomicUsize,
+    retires: std::sync::atomic::AtomicUsize,
+}
+
+impl Count {
+    fn test_local() -> &'static Count {
+        Box::leak(Box::new(Self::default()))
+    }
+
+    fn clear(&self) {
+        self.ctors.store(0, Ordering::Release);
+        self.dtors.store(0, Ordering::Release);
+        self.retires.store(0, Ordering::Release);
+    }
+
+    fn ctors(&self) -> usize {
+        self.ctors.load(Ordering::SeqCst)
+    }
+
+    fn dtors(&self) -> usize {
+        self.dtors.load(Ordering::SeqCst)
+    }
+}
+
+struct Node {
+    count: &'static Count,
+    val: usize,
+    next: AtomicPtr<Node>,
+}
+
+impl Node {
+    fn new(count: &'static Count, val: usize, next: *mut Node) -> Self {
+        count.ctors.fetch_add(1, Ordering::AcqRel);
+        Self {
+            count,
+            val,
+            next: AtomicPtr::new(next),
+        }
+    }
+
+    fn value(&self) -> usize {
+        self.val
+    }
+
+    fn next(&self) -> *const Node {
+        self.next.load(Ordering::Acquire)
+    }
+}
+
+impl Drop for Node {
+    fn drop(&mut self) {
+        self.count.dtors.fetch_add(1, Ordering::AcqRel);
     }
 }
 
@@ -199,5 +260,57 @@ fn multi_reader_protection() {
         assert_eq!(n0 + n1 + n2 + n3, 1);
         assert_eq!(ndrops_42_0.load(Ordering::SeqCst), 1);
         assert_eq!(ndrops_9001.load(Ordering::SeqCst), 0);
+    })
+}
+
+// This is `cleanup_test` from folly.
+#[test]
+fn folly_cleanup() {
+    const THREAD_OPS: usize = 9;
+    const MAIN_OPS: usize = 3;
+    const NUM_THREADS: usize = 2;
+
+    let count = Count::test_local();
+    loom::model(move || {
+        loom::lazy_static! {
+            static ref D: Domain<()> = Domain::new(&());
+        };
+
+        count.clear();
+        let main_done = Arc::new(Mutex::new(()));
+        let main_not_done = main_done.lock();
+        let threads_done = Arc::new(AtomicUsize::new(0));
+        let threads: Vec<_> = (0..NUM_THREADS)
+            .map(|tid| {
+                let main_done = Arc::clone(&main_done);
+                let threads_done = Arc::clone(&threads_done);
+                thread::spawn(move || {
+                    for j in (tid..THREAD_OPS).step_by(NUM_THREADS) {
+                        let obj = Node::new(count, j, std::ptr::null_mut());
+                        let p = Box::into_raw(Box::new(HazPtrObjectWrapper::with_domain(&D, obj)));
+                        unsafe { p.retire(&deleters::drop_box) };
+                    }
+                    threads_done.fetch_add(1, Ordering::AcqRel);
+                    let _ = main_done.lock();
+                })
+            })
+            .collect();
+        {
+            for i in 0..MAIN_OPS {
+                let obj = Node::new(count, i, std::ptr::null_mut());
+                let p = Box::into_raw(Box::new(HazPtrObjectWrapper::with_domain(&D, obj)));
+                unsafe { p.retire(&deleters::drop_box) };
+            }
+        }
+        while threads_done.load(Ordering::Acquire) < NUM_THREADS {
+            thread::yield_now();
+        }
+        assert_eq!(THREAD_OPS + MAIN_OPS, count.ctors());
+        D.cleanup();
+        assert_eq!(THREAD_OPS + MAIN_OPS, count.dtors());
+        drop(main_not_done);
+        for t in threads {
+            t.join().unwrap();
+        }
     })
 }

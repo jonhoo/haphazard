@@ -10,8 +10,14 @@ const SYNC_TIME_PERIOD: u64 = std::time::Duration::from_nanos(2000000000).as_nan
 #[cfg(all(feature = "std", not(miri)))]
 use crate::sync::atomic::AtomicU64;
 
+#[cfg(loom)]
+const RCOUNT_THRESHOLD: isize = 5;
+#[cfg(not(loom))]
 const RCOUNT_THRESHOLD: isize = 1000;
 const HCOUNT_MULTIPLIER: isize = 2;
+#[cfg(loom)]
+const NUM_SHARDS: usize = 2;
+#[cfg(not(loom))]
 const NUM_SHARDS: usize = 8;
 const IGNORED_LOW_BITS: u8 = 8;
 const SHARD_MASK: usize = NUM_SHARDS - 1;
@@ -72,6 +78,13 @@ macro_rules! unique_domain {
 // Macro to make new const only when not in loom.
 macro_rules! new {
     ($($decl:tt)*) => {
+        /// Construct a new domain with the given family type.
+        ///
+        /// The type checker protects you from accidentally using a `HazardPointer` from one domain
+        /// _family_ (the type `F`) with an object protected by a domain in a different family.
+        /// However, it does _not_ protect you from mixing up domains with the same family type.
+        /// Therefore, prefer creating domains with `unique_domain!` where possible, since it
+        /// guarantees a unique `F` for every domain.
         pub $($decl)*(_: &F) -> Self {
             // https://blog.rust-lang.org/2021/02/11/Rust-1.50.0.html#const-value-repetition-for-arrays
             #[cfg(not(loom))]
@@ -310,6 +323,17 @@ impl<F> Domain<F> {
         self.push_list(retired)
     }
 
+    pub fn eager_reclaim(&self) -> usize {
+        self.nbulk_reclaims.fetch_add(1, Ordering::Acquire);
+        self.do_reclamation(0)
+    }
+
+    pub fn cleanup(&self) {
+        self.nbulk_reclaims.fetch_add(1, Ordering::Acquire);
+        self.do_reclamation(0);
+        self.wait_for_zero_bulk_reclaims(); // wait for concurrent bulk_reclaim-s
+    }
+
     fn push_list(&self, mut retired: Box<Retired>) -> usize {
         assert!(
             retired.next.with_mut(|p| p.is_null()),
@@ -534,16 +558,6 @@ impl<F> Domain<F> {
         .expect("system time is too far into the future")
     }
 
-    pub fn eager_reclaim(&self) -> usize {
-        let rcount = self.count.swap(0, Ordering::AcqRel);
-        if rcount != 0 {
-            self.nbulk_reclaims.fetch_add(1, Ordering::Acquire);
-            self.do_reclamation(rcount)
-        } else {
-            0
-        }
-    }
-
     fn reclaim_all_objects(&mut self) {
         for i in 0..NUM_SHARDS {
             let head = self.untagged[i].pop_all();
@@ -562,6 +576,15 @@ impl<F> Domain<F> {
     /// indiscriminately.
     unsafe fn reclaim_unconditional(&self, head: *mut Retired) {
         unsafe { self.reclaim_unprotected(head) };
+    }
+
+    fn wait_for_zero_bulk_reclaims(&self) {
+        while self.nbulk_reclaims.load(Ordering::Acquire) > 0 {
+            #[cfg(not(any(loom, feature = "std")))]
+            core::hint::spin_loop();
+            #[cfg(any(loom, feature = "std"))]
+            crate::sync::yield_now();
+        }
     }
 
     fn free_hazptr_recs(&mut self) {

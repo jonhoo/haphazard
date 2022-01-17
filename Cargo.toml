@@ -12,3 +12,10 @@ default = ["std"]
 
 [target.'cfg(loom)'.dependencies]
 loom = "0.5"
+
+[dev-dependencies]
+criterion = "0.3"
+
+[[bench]]
+name = "folly"
+harness = false

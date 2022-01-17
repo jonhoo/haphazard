@@ -20,6 +20,8 @@ where
     ///
     /// It is okay for existing readers to still refer to Self.
     ///   
+    //TODO: Once arbitrary_self_types is stabilized change `this` back to `self`.
+    //See: https://github.com/rust-lang/rust/issues/44874
     unsafe fn retire(this: *mut Self, deleter: &'static dyn Deleter) -> usize {
         let ptr = this as *mut (dyn Reclaim + 'domain);
         unsafe { (&*this).domain().retire(ptr, deleter) }

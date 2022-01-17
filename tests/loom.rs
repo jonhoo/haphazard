@@ -288,7 +288,7 @@ fn folly_cleanup() {
                     for j in (tid..THREAD_OPS).step_by(NUM_THREADS) {
                         let obj = Node::new(count, j, std::ptr::null_mut());
                         let p = Box::into_raw(Box::new(HazPtrObjectWrapper::with_domain(&D, obj)));
-                        unsafe { p.retire(&deleters::drop_box) };
+                        unsafe { HazPtrObjectWrapper::retire(p, &deleters::drop_box) };
                     }
                     threads_done.fetch_add(1, Ordering::AcqRel);
                     let _ = main_done.lock();
@@ -299,7 +299,7 @@ fn folly_cleanup() {
             for i in 0..MAIN_OPS {
                 let obj = Node::new(count, i, std::ptr::null_mut());
                 let p = Box::into_raw(Box::new(HazPtrObjectWrapper::with_domain(&D, obj)));
-                unsafe { p.retire(&deleters::drop_box) };
+                unsafe { HazPtrObjectWrapper::retire(p, &deleters::drop_box) };
             }
         }
         while threads_done.load(Ordering::Acquire) < NUM_THREADS {

@@ -1,4 +1,4 @@
-use crate::sync::atomic::{AtomicIsize, AtomicPtr, AtomicU64, AtomicUsize};
+use crate::sync::atomic::{AtomicIsize, AtomicPtr, AtomicUsize};
 use crate::{Deleter, HazPtrRecord, Reclaim};
 use alloc::boxed::Box;
 use alloc::collections::BTreeSet;
@@ -7,6 +7,8 @@ use core::sync::atomic::Ordering;
 
 #[cfg(all(feature = "std", not(miri)))]
 const SYNC_TIME_PERIOD: u64 = std::time::Duration::from_nanos(2000000000).as_nanos() as u64;
+#[cfg(all(feature = "std", not(miri)))]
+use crate::sync::atomic::AtomicU64;
 
 const RCOUNT_THRESHOLD: isize = 1000;
 const HCOUNT_MULTIPLIER: isize = 2;

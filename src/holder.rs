@@ -183,6 +183,9 @@ impl<'domain, F> HazardPointer<'domain, F> {
         self.hazard.reset();
     }
 
+    /// # Safety
+    ///
+    /// TODO
     pub unsafe fn protect_raw<'o, T>(&mut self, src: *mut T)
     where
         T: HazPtrObject<'o, F>,

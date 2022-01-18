@@ -96,6 +96,8 @@ macro_rules! new {
             // https://blog.rust-lang.org/2021/02/11/Rust-1.50.0.html#const-value-repetition-for-arrays
             #[cfg(not(loom))]
             let untagged = {
+                // https://github.com/rust-lang/rust-clippy/issues/7665
+                #[allow(clippy::declare_interior_mutable_const)]
                 const RETIRED_LIST: RetiredList = RetiredList::new();
                 [RETIRED_LIST; NUM_SHARDS]
             };
@@ -428,9 +430,9 @@ impl<F> Domain<F> {
             let mut done = true;
             let mut stolen_heads = [core::ptr::null_mut(); NUM_SHARDS];
             let mut empty = true;
-            for i in 0..NUM_SHARDS {
-                stolen_heads[i] = self.untagged[i].pop_all();
-                if !stolen_heads[i].is_null() {
+            for (stolen_head, untagged) in stolen_heads.iter_mut().zip(&self.untagged) {
+                *stolen_head = untagged.pop_all();
+                if !stolen_head.is_null() {
                     empty = false;
                 }
             }
@@ -479,10 +481,9 @@ impl<F> Domain<F> {
         let mut unreclaimed_tail = unreclaimed;
         let mut nreclaimed = 0;
 
-        for i in 0..NUM_SHARDS {
-            // Sort nodes into those that can be reclaimed,
-            // and those that are still guarded
-            let mut node = stolen_heads[i];
+        // Sort nodes into those that can be reclaimed,
+        // and those that are still guarded
+        for mut node in stolen_heads {
             // XXX: This can probably also be hoisted out of the loop, and we can do a _single_
             // reclaim_unprotected call as well.
             let mut reclaimable = core::ptr::null_mut();

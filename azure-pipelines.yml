@@ -49,7 +49,7 @@ jobs:
      - script: cargo miri test
        displayName: cargo miri test
        env:
-         MIRIFLAGS: -Zmiri-ignore-leaks
+         MIRIFLAGS: "-Zmiri-ignore-leaks -Zmiri-disable-isolation"
  - job: loom
    displayName: "Run loom on test suite"
    pool:

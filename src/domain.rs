@@ -9,12 +9,12 @@ use core::sync::atomic::Ordering;
 // `SYNC_TIME_PERIOD` nanoseconds. The next time we should run reclamation is stored in
 // `due_time` inside `Domain`. On `no_std` we don't (yet) have access to time so this feature is
 // disabled. Also on platforms with < 64 bits, we can only store 2^32 nanoseconds -> ~4 seconds or
-// less, so this feature is also disabled. Additionally, miri can't support time because of
-// system calls (perhaps this can be mocked), and loom can't support time for reasons of determinism.
+// less, so this feature is also disabled. Additionally, loom can't support time for reasons of
+// determinism.
 
-#[cfg(all(feature = "std", target_pointer_width = "64", not(miri), not(loom)))]
+#[cfg(all(feature = "std", target_pointer_width = "64", not(loom)))]
 const SYNC_TIME_PERIOD: u64 = std::time::Duration::from_nanos(2000000000).as_nanos() as u64;
-#[cfg(all(feature = "std", target_pointer_width = "64", not(miri), not(loom)))]
+#[cfg(all(feature = "std", target_pointer_width = "64", not(loom)))]
 use crate::sync::atomic::AtomicU64;
 
 #[cfg(loom)]
@@ -62,7 +62,7 @@ pub struct Domain<F> {
     hazptrs: HazPtrRecords,
     untagged: [RetiredList; NUM_SHARDS],
     family: PhantomData<F>,
-    #[cfg(all(feature = "std", target_pointer_width = "64", not(miri), not(loom)))]
+    #[cfg(all(feature = "std", target_pointer_width = "64", not(loom)))]
     due_time: AtomicU64,
     nbulk_reclaims: AtomicUsize,
     count: AtomicIsize,
@@ -113,7 +113,7 @@ macro_rules! new {
                 },
                 untagged,
                 count: AtomicIsize::new(0),
-                #[cfg(all(feature = "std", target_pointer_width = "64", not(miri), not(loom)))]
+                #[cfg(all(feature = "std", target_pointer_width = "64", not(loom)))]
                 due_time: AtomicU64::new(0),
                 nbulk_reclaims: AtomicUsize::new(0),
                 family: PhantomData,
@@ -370,7 +370,7 @@ impl<F> Domain<F> {
                 .compare_exchange_weak(rcount, 0, Ordering::AcqRel, Ordering::Relaxed)
             {
                 Ok(_) => {
-                    #[cfg(all(feature = "std", target_pointer_width = "64", not(miri), not(loom)))]
+                    #[cfg(all(feature = "std", target_pointer_width = "64", not(loom)))]
                     {
                         self.due_time
                             .store(Self::now() + SYNC_TIME_PERIOD, Ordering::Release);
@@ -383,7 +383,7 @@ impl<F> Domain<F> {
         0
     }
 
-    #[cfg(all(feature = "std", target_pointer_width = "64", not(miri), not(loom)))]
+    #[cfg(all(feature = "std", target_pointer_width = "64", not(loom)))]
     fn check_due_time(&self) -> isize {
         let time = Self::now();
         let due = self.due_time.load(Ordering::Acquire);
@@ -411,7 +411,7 @@ impl<F> Domain<F> {
             // TODO: Implement some kind of mock time for no_std.
             // Currently we reclaim only based on rcount on no_std
             // (also the reason for allow unused_mut)
-            #[cfg(all(feature = "std", target_pointer_width = "64", not(miri), not(loom)))]
+            #[cfg(all(feature = "std", target_pointer_width = "64", not(loom)))]
             {
                 rcount = self.check_due_time();
             }
@@ -554,7 +554,7 @@ impl<F> Domain<F> {
         0
     }
 
-    #[cfg(all(feature = "std", target_pointer_width = "64", not(miri), not(loom)))]
+    #[cfg(all(feature = "std", target_pointer_width = "64", not(loom)))]
     fn now() -> u64 {
         use std::convert::TryFrom;
         u64::try_from(

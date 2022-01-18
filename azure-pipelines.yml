@@ -56,7 +56,7 @@ jobs:
      vmImage: ubuntu-latest
    steps:
      - template: install-rust.yml@templates
-     - script: RUSTFLAGS="--cfg loom" cargo test --release --test loom
+     - script: LOOM_MAX_PREEMPTIONS=2 RUSTFLAGS="--cfg loom" cargo test --release --test loom
        displayName: cargo test --test loom
  - job: asan
    displayName: "Run address sanitizer on test suite"

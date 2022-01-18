@@ -1,0 +1,82 @@
+jobs:
+ - template: default.yml@templates
+   parameters:
+     minrust: 1.56.0
+ - template: coverage.yml@templates
+   parameters:
+     token: $(CODECOV_TOKEN_SECRET)
+ - job: no_std_32bit
+   displayName: "Compile-check on 32 bit no_std target"
+   pool:
+     vmImage: ubuntu-latest
+   steps:
+     - template: install-rust.yml@templates
+       parameters:
+         targets:
+          - thumbv7m-none-eabi
+     - bash: cargo check --target thumbv7m-none-eabi --no-default-features
+       displayName: cargo check
+     - script: |
+        ! cargo check --target thumbv7m-none-eabi
+       displayName: Compilation fails with std enabled 
+ - job: no_std_64bit
+   displayName: "Compile-check on 64 bit no_std target"
+   pool:
+     vmImage: ubuntu-latest
+   steps:
+     - template: install-rust.yml@templates
+       parameters:
+         targets:
+          - aarch64-unknown-none
+     - bash: cargo check --target aarch64-unknown-none --no-default-features
+       displayName: cargo check
+     - script: |
+        ! cargo check --target aarch64-unknown-none
+       displayName: Compilation fails with std enabled 
+ - job: miri
+   displayName: "Run miri on test suite"
+   pool:
+     vmImage: ubuntu-latest
+   steps:
+     - bash: |
+         echo '##vso[task.setvariable variable=nightly]nightly-'$(curl -s https://rust-lang.github.io/rustup-components-history/x86_64-unknown-linux-gnu/miri)
+       displayName: "Determine latest miri nightly"
+     - template: install-rust.yml@templates
+       parameters:
+         rust: $(nightly)
+         components:
+           - miri
+     - script: cargo miri test
+       displayName: cargo miri test
+       env:
+         MIRIFLAGS: -Zmiri-ignore-leaks
+ - job: loom
+   displayName: "Run loom on test suite"
+   pool:
+     vmImage: ubuntu-latest
+   steps:
+     - template: install-rust.yml@templates
+     - script: RUSTFLAGS="--cfg loom" cargo test --release --test loom
+       displayName: cargo test --test loom
+ - job: asan
+   displayName: "Run address sanitizer on test suite"
+   pool:
+     vmImage: ubuntu-latest
+   steps:
+     - template: install-rust.yml@templates
+       parameters:
+         rust: nightly
+     - bash: |
+           sudo ln -s /usr/bin/llvm-symbolizer-6.0 /usr/bin/llvm-symbolizer
+       displayName: Enable debug symbols
+     # only --lib --tests b/c of https://github.com/rust-lang/rust/issues/53945
+     - script: |
+           env ASAN_OPTIONS="detect_odr_violation=0:detect_leaks=0" RUSTFLAGS="-Z sanitizer=address" cargo test --lib --tests --all-features --target x86_64-unknown-linux-gnu
+       displayName: cargo -Z sanitizer=address test
+resources:
+  repositories:
+    - repository: templates
+      type: github
+      name: crate-ci/azure-pipelines
+      ref: refs/heads/v0.4
+      endpoint: jonhoo

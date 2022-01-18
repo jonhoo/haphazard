@@ -48,7 +48,7 @@ folly_bench!(concurrent_new_holder, {
 });
 folly_bench!(concurrent_retire, {
     let foo = Box::into_raw(Box::new(HazPtrObjectWrapper::with_global_domain(0)));
-    black_box(unsafe { foo.retire(&deleters::drop_box) });
+    black_box(unsafe { HazPtrObjectWrapper::retire(foo, &deleters::drop_box) });
 });
 
 criterion_group!(benches, concurrent_new_holder, concurrent_retire);

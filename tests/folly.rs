@@ -1,38 +1,37 @@
 use haphazard::*;
 
 use std::sync::atomic::Ordering;
-use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicPtr, AtomicUsize};
 
 #[derive(Default, Debug)]
-struct Count {
+pub struct Count {
     ctors: AtomicUsize,
     dtors: AtomicUsize,
-    retires: AtomicUsize,
+    _retires: AtomicUsize,
 }
 
 impl Count {
-    fn test_local() -> &'static Count {
+    pub fn test_local() -> &'static Count {
         Box::leak(Box::new(Self::default()))
     }
 
-    fn ctors(&self) -> usize {
+    pub fn ctors(&self) -> usize {
         self.ctors.load(Ordering::SeqCst)
     }
 
-    fn dtors(&self) -> usize {
+    pub fn dtors(&self) -> usize {
         self.dtors.load(Ordering::SeqCst)
     }
 }
 
-struct Node {
+pub struct Node {
     count: &'static Count,
     val: usize,
     next: AtomicPtr<Node>,
 }
 
 impl Node {
-    fn new(count: &'static Count, val: usize, next: *mut Node) -> Self {
+    pub fn new(count: &'static Count, val: usize, next: *mut Node) -> Self {
         count.ctors.fetch_add(1, Ordering::AcqRel);
         Self {
             count,
@@ -41,11 +40,11 @@ impl Node {
         }
     }
 
-    fn value(&self) -> usize {
+    pub fn value(&self) -> usize {
         self.val
     }
 
-    fn next(&self) -> *const Node {
+    pub fn next(&self) -> *const Node {
         self.next.load(Ordering::Acquire)
     }
 }

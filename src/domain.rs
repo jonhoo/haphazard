@@ -556,7 +556,6 @@ impl<F> Domain<F> {
 
     #[cfg(all(feature = "std", target_pointer_width = "64", not(loom)))]
     fn now() -> u64 {
-        use std::convert::TryFrom;
         u64::try_from(
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

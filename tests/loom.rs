@@ -2,10 +2,7 @@
 
 use haphazard::*;
 
-use loom::sync::{
-    atomic::{AtomicPtr, AtomicUsize},
-    Mutex,
-};
+use loom::sync::{atomic::AtomicUsize, Mutex};
 use loom::thread;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -65,7 +62,7 @@ impl Node {
         Self {
             count,
             val,
-            next: AtomicPtr::new(next),
+            next: unsafe { AtomicPtr::new(next) },
         }
     }
 
@@ -74,7 +71,7 @@ impl Node {
     }
 
     fn next(&self) -> *const Node {
-        self.next.load(Ordering::Acquire)
+        self.next.load_ptr()
     }
 }
 
@@ -94,20 +91,16 @@ fn acquires_multiple() {
 
         let domain = Domain::global();
 
-        let x = Arc::new(AtomicPtr::new(Box::into_raw(Box::new(
-            HazPtrObjectWrapper::with_domain(&domain, (1, drops_1)),
-        ))));
-        let y = Arc::new(AtomicPtr::new(Box::into_raw(Box::new(
-            HazPtrObjectWrapper::with_domain(&domain, (2, drops_2)),
-        ))));
+        let x = Arc::new(AtomicPtr::from(Box::new((1, drops_1))));
+        let y = Arc::new(AtomicPtr::from(Box::new((2, drops_2))));
 
         let (tx, rx) = loom::sync::mpsc::channel();
         let x1 = Arc::clone(&x);
         let y1 = Arc::clone(&y);
         let t1 = thread::spawn(move || {
-            let mut hazptr_array = HazardPointer::make_many_in_domain(&domain);
+            let mut hazptr_array = HazardPointer::many_in_domain(&domain);
 
-            let [my_x, my_y] = unsafe { hazptr_array.protect_all([&x1, &y1]) };
+            let [my_x, my_y] = unsafe { hazptr_array.protect_all([x1.as_std(), y1.as_std()]) };
 
             let my_x = my_x.expect("not null");
             let my_y = my_y.expect("not null");
@@ -130,12 +123,14 @@ fn acquires_multiple() {
         assert_eq!(ndrops_1.load(Ordering::SeqCst), 0);
         assert_eq!(ndrops_2.load(Ordering::SeqCst), 0);
 
-        unsafe { HazPtrObjectWrapper::retire(x.load(Ordering::SeqCst), &deleters::drop_box) };
+        let old = unsafe { x.swap_ptr(std::ptr::null_mut()) }.expect("non-null");
+        unsafe { old.retire_in(&domain) };
         domain.eager_reclaim();
         assert_eq!(ndrops_1.load(Ordering::SeqCst), 1);
         assert_eq!(ndrops_2.load(Ordering::SeqCst), 0);
 
-        unsafe { HazPtrObjectWrapper::retire(y.load(Ordering::SeqCst), &deleters::drop_box) };
+        let old = unsafe { y.swap_ptr(std::ptr::null_mut()) }.expect("non-null");
+        unsafe { old.retire_in(&domain) };
         domain.eager_reclaim();
         assert_eq!(ndrops_1.load(Ordering::SeqCst), 1);
         assert_eq!(ndrops_2.load(Ordering::SeqCst), 1);
@@ -149,15 +144,13 @@ fn single_reader_protection() {
         let ndrops_42_0 = drops_42.counter();
         let ndrops_42_1 = drops_42.counter();
 
-        let x = Arc::new(AtomicPtr::new(Box::into_raw(Box::new(
-            HazPtrObjectWrapper::with_global_domain((42, drops_42)),
-        ))));
+        let x = Arc::new(AtomicPtr::from(Box::new((42, drops_42))));
 
         let (tx, rx) = loom::sync::mpsc::channel();
         let x1 = Arc::clone(&x);
         let t1 = thread::spawn(move || {
-            let mut h = HazardPointer::make_global();
-            let my_x = unsafe { h.protect(&*x1) }.expect("not null");
+            let mut h = HazardPointer::new();
+            let my_x = x1.load(&mut h).expect("not null");
 
             // Now we can let the writer change things.
             tx.send(()).unwrap();
@@ -173,13 +166,8 @@ fn single_reader_protection() {
 
         let drops_9001 = CountDrops::new();
         let ndrops_9001 = drops_9001.counter();
-        let old = x.swap(
-            Box::into_raw(Box::new(HazPtrObjectWrapper::with_global_domain((
-                9001, drops_9001,
-            )))),
-            std::sync::atomic::Ordering::SeqCst,
-        );
-        let n0 = unsafe { HazPtrObjectWrapper::retire(old, &deleters::drop_box) };
+        let old = x.swap(Box::new((9001, drops_9001))).expect("non-null");
+        let n0 = unsafe { old.retire() };
 
         let n1 = Domain::global().eager_reclaim();
 
@@ -200,16 +188,14 @@ fn multi_reader_protection() {
         let ndrops_42_1 = drops_42.counter();
         let ndrops_42_2 = drops_42.counter();
 
-        let x = Arc::new(AtomicPtr::new(Box::into_raw(Box::new(
-            HazPtrObjectWrapper::with_global_domain((42, drops_42)),
-        ))));
+        let x = Arc::new(AtomicPtr::from(Box::new((42, drops_42))));
 
         let (tx, rx) = loom::sync::mpsc::channel();
         let x1 = Arc::clone(&x);
         let tx1 = tx.clone();
         let t1 = thread::spawn(move || {
-            let mut h = HazardPointer::make_global();
-            let my_x = unsafe { h.protect(&*x1) }.expect("not null");
+            let mut h = HazardPointer::new();
+            let my_x = x1.load(&mut h).expect("not null");
 
             // Now we can let the writer change things.
             tx1.send(()).unwrap();
@@ -220,8 +206,8 @@ fn multi_reader_protection() {
         let x2 = Arc::clone(&x);
         let tx2 = tx.clone();
         let t2 = thread::spawn(move || {
-            let mut h = HazardPointer::make_global();
-            let my_x = unsafe { h.protect(&*x2) }.expect("not null");
+            let mut h = HazardPointer::new();
+            let my_x = x2.load(&mut h).expect("not null");
 
             // Now we can let the writer change things.
             tx2.send(()).unwrap();
@@ -238,13 +224,8 @@ fn multi_reader_protection() {
 
         let drops_9001 = CountDrops::new();
         let ndrops_9001 = drops_9001.counter();
-        let old = x.swap(
-            Box::into_raw(Box::new(HazPtrObjectWrapper::with_global_domain((
-                9001, drops_9001,
-            )))),
-            std::sync::atomic::Ordering::SeqCst,
-        );
-        let n0 = unsafe { HazPtrObjectWrapper::retire(old, &deleters::drop_box) };
+        let old = x.swap(Box::new((9001, drops_9001))).expect("non-null");
+        let n0 = unsafe { old.retire() };
 
         let n1 = Domain::global().eager_reclaim();
 
@@ -287,8 +268,8 @@ fn folly_cleanup() {
                 thread::spawn(move || {
                     for j in (tid..THREAD_OPS).step_by(NUM_THREADS) {
                         let obj = Node::new(count, j, std::ptr::null_mut());
-                        let p = Box::into_raw(Box::new(HazPtrObjectWrapper::with_domain(&D, obj)));
-                        unsafe { HazPtrObjectWrapper::retire(p, &deleters::drop_box) };
+                        let p = Box::into_raw(Box::new(obj));
+                        unsafe { D.retire_ptr::<_, Box<_>>(p) };
                     }
                     threads_done.fetch_add(1, Ordering::AcqRel);
                     let _ = main_done.lock();
@@ -298,8 +279,8 @@ fn folly_cleanup() {
         {
             for i in 0..MAIN_OPS {
                 let obj = Node::new(count, i, std::ptr::null_mut());
-                let p = Box::into_raw(Box::new(HazPtrObjectWrapper::with_domain(&D, obj)));
-                unsafe { HazPtrObjectWrapper::retire(p, &deleters::drop_box) };
+                let p = Box::into_raw(Box::new(obj));
+                unsafe { D.retire_ptr::<_, Box<_>>(p) };
             }
         }
         while threads_done.load(Ordering::Acquire) < NUM_THREADS {

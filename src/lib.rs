@@ -1,12 +1,9 @@
-//! Hazard pointers for dynamic memory management in lock-free data structures.
+//! Dynamic memory management for lock-free data structures.
 //!
 //! This library implements the [_hazard pointer memory reclamation mechanism_][hazptr],
 //! specifically as proposed for the [C++ Concurrency Technical Specification][cts]. It is adapted
 //! from the [implementation][folly-hazptr] found in Facebook's [Folly library][folly]. The initial
 //! phases of implementation were all [live streamed].
-//!
-//! TODO: Note differences from spec and from folly. Among other things, see [this note from
-//! folly](https://github.com/facebook/folly/blob/594b7e770176003d0f6b4cf725dd02a09cba533c/folly/synchronization/Hazptr.h#L193).
 //!
 //! At a high level, hazard pointers provide a mechanism that allows readers of shared pointers to
 //! prevent concurrent reclamation of the pointed-to objects by concurrent writers for as long as
@@ -43,6 +40,81 @@
 //! TODO: Ref section 5 of [the proposal][cts] and [example from folly's
 //! docs](https://github.com/facebook/folly/blob/594b7e770176003d0f6b4cf725dd02a09cba533c/folly/synchronization/Hazptr.h#L76).
 //!
+//! ```
+//! use haphazard::{AtomicPtr, Domain, HazardPointer};
+//!
+//! // First, create something that's intended to be concurrently accessed.
+//! let x = AtomicPtr::from(Box::new(42));
+//!
+//! // All reads must happen through a hazard pointer, so make one of those:
+//! let mut h = HazardPointer::new();
+//!
+//! // We can now use the hazard pointer to read from the pointer without
+//! // worrying about it being deallocated while we read.
+//! let my_x = x.safe_load(&mut h).expect("not null");
+//! assert_eq!(*my_x, 42);
+//!
+//! // We can willingly give up the guard to allow writers to reclaim the Box.
+//! h.reset_protection();
+//! // Doing so invalidates the reference we got from .load:
+//! // let _ = *my_x; // won't compile
+//!
+//! // Hazard pointers can be re-used across multiple reads.
+//! let my_x = x.safe_load(&mut h).expect("not null");
+//! assert_eq!(*my_x, 42);
+//!
+//! // Dropping the hazard pointer releases our guard on the Box.
+//! drop(h);
+//! // And it also invalidates the reference we got from .load:
+//! // let _ = *my_x; // won't compile
+//!
+//! // Multiple readers can access a value at once:
+//!
+//! let mut h = HazardPointer::new();
+//! let my_x = x.safe_load(&mut h).expect("not null");
+//!
+//! let mut h_tmp = HazardPointer::new();
+//! let _ = x.safe_load(&mut h_tmp).expect("not null");
+//! drop(h_tmp);
+//!
+//! // Writers can replace the value, but doing so won't reclaim the old Box.
+//! let old = x.swap(Box::new(9001)).expect("not null");
+//!
+//! // New readers will see the new value:
+//! let mut h2 = HazardPointer::new();
+//! let my_x2 = x.safe_load(&mut h2).expect("not null");
+//! assert_eq!(*my_x2, 9001);
+//!
+//! // And old readers can still access the old value:
+//! assert_eq!(*my_x, 42);
+//!
+//! // The writer can retire the value old readers are seeing.
+//! //
+//! // Safety: this value has not been retired before.
+//! unsafe { old.retire() };
+//!
+//! // Reads will continue to work fine, as they're guarded by the hazard.
+//! assert_eq!(*my_x, 42);
+//!
+//! // Even if the writer actively tries to reclaim retired objects, the hazard makes readers safe.
+//! let n = Domain::global().eager_reclaim();
+//! assert_eq!(n, 0);
+//! assert_eq!(*my_x, 42);
+//!
+//! // Only once the last hazard guarding the old value goes away will the value be reclaimed.
+//! drop(h);
+//! let n = Domain::global().eager_reclaim();
+//! assert_eq!(n, 1);
+//! ```
+//!
+//! # Differences from the specification
+//!
+//! # Differences from the folly
+//!
+//! TODO: Note differences from spec and from folly. Among other things, see [this note from
+//! folly](https://github.com/facebook/folly/blob/594b7e770176003d0f6b4cf725dd02a09cba533c/folly/synchronization/Hazptr.h#L193).
+//!
+//!
 //! [hazptr]: https://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.395.378&rep=rep1&type=pdf
 //! [cts]: http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2021/p1121r3.pdf
 //! [folly-hazptr]: https://github.com/facebook/folly/blob/main/folly/synchronization/Hazptr.h
@@ -54,15 +126,16 @@
 // TODO: Incorporate doc strings around expectations from section 6 of the hazptr TS2 proposal.
 
 #![deny(unsafe_op_in_unsafe_fn)]
+#![warn(missing_docs)]
+#![warn(rustdoc::broken_intra_doc_links, rust_2018_idioms)]
 #![allow(dead_code)]
 #![cfg_attr(not(feature = "std"), no_std)]
 
 extern crate alloc;
 
-mod deleter;
 mod domain;
-mod holder;
-mod object;
+mod hazard;
+mod pointer;
 mod record;
 mod sync;
 
@@ -76,16 +149,494 @@ enum HeavyBarrierKind {
     Normal,
     Expedited,
 }
+
 fn asymmetric_heavy_barrier(_: HeavyBarrierKind) {
     // TODO: if cfg!(linux) {
     // https://github.com/facebook/folly/blob/bd600cd4e88f664f285489c76b6ad835d8367cd2/folly/synchronization/AsymmetricMemoryBarrier.cpp#L84
     crate::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
 }
 
-pub use deleter::{deleters, Deleter, Reclaim};
+/// Raw building blocks for managing hazard pointers.
+pub mod raw {
+    pub use crate::domain::Domain;
+    /// Well-known domain families.
+    pub mod families {
+        pub use crate::domain::Global;
+    }
+    pub use crate::hazard::HazardPointer;
+    pub use crate::pointer::{Pointer, Reclaim};
+}
+
+use std::marker::PhantomData;
+use std::ops::Deref;
+use std::ops::DerefMut;
+use std::ptr::NonNull;
+use std::sync::atomic::Ordering;
+
 pub use domain::Domain;
 pub use domain::Global;
-pub use holder::HazardPointer;
-pub use object::{HazPtrObject, HazPtrObjectWrapper};
+pub use hazard::{HazardPointer, HazardPointerArray};
 
-pub(crate) use record::HazPtrRecord;
+/// A managed pointer type which can be safely shared between threads.
+///
+/// Unlike [`std::sync::AtomicPtr`](core::sync::AtomicPtr), `haphazard::AtomicPtr` can safely load
+/// `&T` directly, and ensure that the referenced `T` is not deallocated until the `&T` is dropped,
+/// even in the presence of concurrent writers. Also unlike
+/// [`std::sync::AtomicPtr`](core::sync::AtomicPtr), **all loads and stores on this type use
+/// `Acquire` and `Release` semantics**.
+///
+/// To construct one, use `AtomicPtr::from`:
+///
+/// ```rust
+/// # use haphazard::AtomicPtr;
+/// let _: AtomicPtr<usize> = AtomicPtr::from(Box::new(42));
+/// ```
+///
+/// Note the explicit use of `AtomicPtr<usize>`, which is needed to get the default values for the
+/// generic arguments `F` and `P`, the domain family and pointer types of the stored values.
+/// Families are discussed in the documentation for [`Domain`]. The pointer type `P`, which must
+/// implement [`raw::Pointer`], is the type originaly used to produce the stored pointer. This is
+/// used to ensure that when writers drop a value, it is dropped using the appropriate `Drop`
+/// implementation.
+///
+/// This type has the same in-memory representation as a
+/// [`std::sync::AtomicPtr`](core::sync::AtomicPtr).
+///
+/// **Note:** This type is only available on platforms that support atomic loads and stores of
+/// pointers. Its size depends on the target pointer’s size.
+///
+// The unsafe constract enforced throughout this crate is that a given `AtomicPtr<T, F, P>` only
+// ever holds the address of a valid `T` allocated through `P` from a domain with family `F`, or
+// `null`. This generally means that there are a fair few safety constraints on _writes_ to an
+// `AtomicPtr`, but very few safety constraints on _reads_. This is intentional, with the
+// assumption being that most consumers will read in more places than they write.
+//
+// Also, when working with this code, keep in mind that `AtomicPtr<T>` does not _own_ its `T`. It
+// is entirely possible for an application to have multiple `AtomicPtr<T>` that all point to the
+// _same_ `T`. This is why most of the safety docs refer to "load from any AtomicPtr".
+//
+// TODO:
+//  - copy_and_move test.
+//  - requires double-retire protection?
+#[repr(transparent)]
+pub struct AtomicPtr<T, F = domain::Global, P = Box<T>>(
+    crate::sync::atomic::AtomicPtr<T>,
+    PhantomData<(F, *mut P)>,
+);
+
+impl<T, F, P> From<P> for AtomicPtr<T, F, P>
+where
+    P: raw::Pointer<T>,
+{
+    fn from(p: P) -> Self {
+        Self(
+            crate::sync::atomic::AtomicPtr::new(p.into_raw()),
+            PhantomData,
+        )
+    }
+}
+
+impl<T, F, P> AtomicPtr<T, F, P> {
+    /// Directly construct an `AtomicPtr` from a raw pointer.
+    ///
+    /// # Safety
+    ///
+    /// 1. `p` must reference a valid `T`, or be null.
+    /// 2. `p` must have been allocated using the pointer type `P`.
+    /// 3. `*p` must only be dropped through [`Domain::retire_ptr`].
+    pub unsafe fn new(p: *mut T) -> Self {
+        Self(crate::sync::atomic::AtomicPtr::new(p), PhantomData)
+    }
+
+    /// Directly access the "real" underlying `AtomicPtr`.
+    ///
+    /// # Safety
+    ///
+    /// If the stored pointer is modified, the new value must conform to the same safety
+    /// requirements as the argument to [`AtomicPtr::new`].
+    pub unsafe fn as_std(&self) -> &crate::sync::atomic::AtomicPtr<T> {
+        &self.0
+    }
+
+    /// Directly access the "real" underlying `AtomicPtr` mutably.
+    ///
+    /// # Safety
+    ///
+    /// If the stored pointer is modified, the new value must conform to the same safety
+    /// requirements as the argument to [`AtomicPtr::new`].
+    pub unsafe fn as_std_mut(&mut self) -> &mut crate::sync::atomic::AtomicPtr<T> {
+        &mut self.0
+    }
+}
+
+/// A `*mut T` that was previously stored in an [`AtomicPtr`].
+///
+/// This type exists primarily to capture the family and pointer type of the [`AtomicPtr`] the
+/// value was previously stored in, so that callers don't need to provide `F` and `P` to
+/// [`Replaced::retire`] and [`Replaced::retire_in`].
+///
+/// This type has the same in-memory representation as a [`std::ptr::NonNull`](core::ptr::NonNull).
+#[repr(transparent)]
+pub struct Replaced<T, F, P> {
+    ptr: NonNull<T>,
+    _family: PhantomData<F>,
+    _holder: PhantomData<P>,
+}
+
+impl<T, F, P> Clone for Replaced<T, F, P> {
+    fn clone(&self) -> Self {
+        Self {
+            ptr: self.ptr,
+            _family: self._family,
+            _holder: self._holder,
+        }
+    }
+}
+impl<T, F, P> Copy for Replaced<T, F, P> {}
+
+impl<T, F, P> Deref for Replaced<T, F, P> {
+    type Target = NonNull<T>;
+    fn deref(&self) -> &Self::Target {
+        &self.ptr
+    }
+}
+impl<T, F, P> DerefMut for Replaced<T, F, P> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.ptr
+    }
+}
+
+impl<T, F, P> AsRef<NonNull<T>> for Replaced<T, F, P> {
+    fn as_ref(&self) -> &NonNull<T> {
+        &self.ptr
+    }
+}
+
+impl<T, F, P> Replaced<T, F, P> {
+    /// Extract the pointer originally stored in the [`AtomicPtr`].
+    pub fn into_inner(self) -> NonNull<T> {
+        self.ptr
+    }
+}
+
+impl<T, P> Replaced<T, raw::families::Global, P>
+where
+    P: raw::Pointer<T>,
+{
+    /// Retire the referenced object, and reclaim it once it is safe to do so.
+    ///
+    /// # Safety
+    ///
+    /// 1. The pointed-to object will never again be returned by any [`AtomicPtr::load`].
+    /// 2. The pointed-to object has not already been retired.
+    pub unsafe fn retire(self) -> usize {
+        // Safety:
+        //
+        // 1. Same as our caller requirement #1.
+        // 2. Same as our caller requirement #2.
+        // 3. Since there is exactly one Domain<Global>, we know that all calls to `load` that have
+        //    returned this object must have been using the same (global) domain as we're retiring
+        //    to.
+        unsafe { self.retire_in(Domain::global()) }
+    }
+}
+
+impl<T, F, P> Replaced<T, F, P>
+where
+    P: raw::Pointer<T>,
+{
+    /// Retire the referenced object, and reclaim it once it is safe to do so, through the given
+    /// `domain`.
+    ///
+    /// # Safety
+    ///
+    /// 1. The pointed-to object will never again be returned by any [`AtomicPtr::load`].
+    /// 2. The pointed-to object has not already been retired.
+    /// 3. All calls to [`load`](AtomicPtr::load) that can have seen the pointed-to object were
+    ///    using hazard pointers from `domain`.
+    ///
+    /// Note that requirement #3 is _partially_ enforced by the domain family (`F`), but it's on
+    /// you to ensure that you don't "cross the streams" between multiple `Domain<F>`, if those can
+    /// arise in your application.
+    pub unsafe fn retire_in(mut self, domain: &Domain<F>) -> usize {
+        // Safety:
+        //
+        // 1. implied by our #1 and #3: if load won't return it, there's no other way to guard it
+        // 2. implied by our #2
+        // 3. implied by AtomicPtr::new's #1 and #3
+        unsafe { domain.retire_ptr::<T, P>(self.ptr.as_mut()) }
+    }
+}
+
+impl<T, P> AtomicPtr<T, domain::Global, P> {
+    /// Loads the value from the stored pointer and guards it using the given hazard pointer.
+    ///
+    /// The guard ensures that the loaded `T` will remain valid for as long as you hold a reference
+    /// to it.
+    ///
+    /// Note that this method is _only_ available when using [`Domain<Global>`](domain::Global),
+    /// since it is a singleton, and thus is guaranteed to fulfill the safety requirement of
+    /// [`AtomicPtr::load`]. For all other domains, use [`AtomicPtr::load`].
+    pub fn safe_load<'hp>(
+        &'_ self,
+        hp: &'hp mut HazardPointer<'static, domain::Global>,
+    ) -> Option<&'hp T>
+    where
+        T: 'hp,
+    {
+        // Safety: since there is exactly one Domain<Global>, we know that all calls to `load` that
+        // have returned this object must have been using the same (global) domain as we're
+        // retiring to.
+        unsafe { self.load(hp) }
+    }
+}
+
+impl<T, F, P> AtomicPtr<T, F, P> {
+    /// Loads the value from the stored pointer and guards it using the given hazard pointer.
+    ///
+    /// The guard ensures that the loaded `T` will remain valid for as long as you hold a reference
+    /// to it.
+    ///
+    /// # Safety
+    ///
+    /// All objects stored in this [`AtomicPtr`] are retired through the same [`Domain`] as the one
+    /// that produced `hp`.
+    ///
+    /// This requirement is _partially_ enforced by the domain family (`F`), but it's on you to
+    /// ensure that you don't "cross the streams" between multiple `Domain<F>`, if those can arise
+    /// in your application.
+    pub unsafe fn load<'hp, 'd>(&'_ self, hp: &'hp mut HazardPointer<'d, F>) -> Option<&'hp T>
+    where
+        T: 'hp,
+        F: 'static,
+    {
+        unsafe { hp.protect(&self.0) }
+    }
+
+    /// Returns a mutable reference to the underlying pointer.
+    ///
+    /// # Safety
+    ///
+    /// If the stored pointer is modified, the new value must conform to the same safety
+    /// requirements as the argument to [`AtomicPtr::new`].
+    #[cfg(not(loom))]
+    pub unsafe fn get_mut(&mut self) -> &mut *mut T {
+        self.0.get_mut()
+    }
+
+    /// Consumes the atomic and returns the contained value.
+    ///
+    /// This is safe because passing `self` by value guarantees that no other threads are
+    /// concurrently accessing the atomic data, and no loads can happen in the future.
+    pub fn into_inner(self) -> *mut T {
+        #[cfg(not(loom))]
+        let ptr = self.0.into_inner();
+        // Safety: we own self, so the atomic value is visible to no other threads.
+        #[cfg(loom)]
+        let ptr = unsafe { self.0.unsync_load() };
+        ptr
+    }
+}
+
+impl<T, P> AtomicPtr<T, raw::families::Global, P>
+where
+    P: raw::Pointer<T>,
+{
+    /// Retire the currently-referenced object, and reclaim it once it is safe to do so.
+    ///
+    /// # Safety
+    ///
+    /// 1. The currently-referenced object will never again be returned by any [`AtomicPtr::load`].
+    /// 2. The currently-referenced object has not already been retired.
+    pub unsafe fn retire(self) -> usize {
+        // Safety:
+        //
+        // 1. Same as our caller requirement #1.
+        // 2. Same as our caller requirement #2.
+        // 3. Since there is exactly one Domain<Global>, we know that all calls to `load` that have
+        //    returned this object must have been using the same (global) domain as we're retiring
+        //    to.
+        unsafe { self.retire_in(Domain::global()) }
+    }
+}
+
+impl<T, F, P> AtomicPtr<T, F, P>
+where
+    P: raw::Pointer<T>,
+{
+    /// Retire the currently-referenced object, and reclaim it once it is safe to do so, through
+    /// the given `domain`.
+    ///
+    /// # Safety
+    ///
+    /// 1. The currently-referenced object will never again be returned by any [`AtomicPtr::load`].
+    /// 2. The currently-referenced object has not already been retired.
+    /// 3. All calls to [`load`](AtomicPtr::load) that can have seen the currently-referenced
+    ///    object were using hazard pointers from `domain`.
+    ///
+    /// Note that requirement #3 is _partially_ enforced by the domain family (`F`), but it's on
+    /// you to ensure that you don't "cross the streams" between multiple `Domain<F>`, if those can
+    /// arise in your application.
+    pub unsafe fn retire_in(self, domain: &Domain<F>) -> usize {
+        let ptr = self.into_inner();
+        unsafe { domain.retire_ptr::<T, P>(ptr) }
+    }
+
+    /// Store an object into the pointer.
+    ///
+    /// Note, crucially, that this will _not_ automatically retire the pointer that's _currently_
+    /// stored, which is why it is safe.
+    pub fn store(&self, p: P) {
+        let ptr = p.into_raw();
+        // Safety (from AtomicPtr::new):
+        //
+        // #1 & #2 are both satisfied by virute of `p` being of type `P`, which holds a valid `T`.
+        // #3 is satisfied because the `P` is moved into `store`, and so can only be dropped
+        // through the `unsafe` retire methods on `AtomicPtr`, all of which call
+        // `Domain::retire_ptr`, or by dereferencing a raw pointer which is unsafe anyway.
+        unsafe { self.store_ptr(ptr) }
+    }
+
+    /// Overwrite the currently stored pointer with the given one, and return the previous pointer.
+    pub fn swap(&self, p: P) -> Option<Replaced<T, F, P>> {
+        let ptr = p.into_raw();
+        // Safety (from AtomicPtr::new):
+        //
+        // #1 & #2 are both satisfied by virute of `p` being of type `P`, which holds a valid `T`.
+        // #3 is satisfied because the `P` is moved into `store`, and so can only be dropped
+        // through the `unsafe` retire methods on `AtomicPtr` and `Replaced`, all of which call
+        // `Domain::retire_ptr`, or by dereferencing a raw pointer which is unsafe anyway.
+        unsafe { self.swap_ptr(ptr) }
+    }
+
+    /// Stores an object into the pointer if the current pointer is `current`.
+    ///
+    /// The return value is a result indicating whether the new value was written and containing
+    /// the previous value. On success this value is guaranteed to be equal to `current`.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    pub fn compare_exchange(
+        &self,
+        current: *mut T,
+        new: P,
+    ) -> Result<Option<Replaced<T, F, P>>, P> {
+        let new = new.into_raw();
+        // Safety (from AtomicPtr::new):
+        //
+        // #1 & #2 are both satisfied by virute of `p` being of type `P`, which holds a valid `T`.
+        // #3 is satisfied because the `P` is moved into `store`, and so can only be dropped
+        // through the `unsafe` retire methods on `AtomicPtr` and `Replaced`, all of which call
+        // `Domain::retire_ptr`, or by dereferencing a raw pointer which is unsafe anyway.
+        let r = unsafe { self.compare_exchange_ptr(current, new) };
+        r.map_err(|ptr| {
+            // Safety: `ptr` is `new`, which was never shared, and was a valid `P`.
+            unsafe { P::from_raw(ptr) }
+        })
+    }
+
+    /// Stores an object into the pointer if the current pointer is `current`.
+    ///
+    /// Unlike [`AtomicPtr::compare_exchange`], this function is allowed to spuriously fail even
+    /// when the comparison succeeds, which can result in more efficient code on some platforms.
+    /// The return value is a result indicating whether the new value was written and containing
+    /// the previous value. On success this value is guaranteed to be equal to `current`.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    pub fn compare_exchange_weak(
+        &self,
+        current: *mut T,
+        new: P,
+    ) -> Result<Option<Replaced<T, F, P>>, P> {
+        let new = new.into_raw();
+        // Safety (from AtomicPtr::new):
+        //
+        // #1 & #2 are both satisfied by virute of `p` being of type `P`, which holds a valid `T`.
+        // #3 is satisfied because the `P` is moved into `store`, and so can only be dropped
+        // through the `unsafe` retire methods on `AtomicPtr` and `Replaced`, all of which call
+        // `Domain::retire_ptr`, or by dereferencing a raw pointer which is unsafe anyway.
+        let r = unsafe { self.compare_exchange_weak_ptr(current, new) };
+        r.map_err(|ptr| {
+            // Safety: `ptr` is `new`, which was never shared, and was a valid `P`.
+            unsafe { P::from_raw(ptr) }
+        })
+    }
+}
+
+impl<T, F, P> AtomicPtr<T, F, P> {
+    /// Loads the current pointer.
+    pub fn load_ptr(&self) -> *mut T {
+        self.0.load(Ordering::Acquire)
+    }
+
+    /// Overwrite the currently stored pointer with the given one.
+    ///
+    /// Note, crucially, that this will _not_ automatically retire the pointer that's _currently_
+    /// stored.
+    ///
+    /// # Safety
+    ///
+    /// `ptr must conform to the same safety requirements as the argument to [`AtomicPtr::new`].
+    pub unsafe fn store_ptr(&self, ptr: *mut T) {
+        self.0.store(ptr, Ordering::Release)
+    }
+
+    /// Overwrite the currently stored pointer with the given one, and return the previous pointer.
+    ///
+    /// # Safety
+    ///
+    /// `ptr must conform to the same safety requirements as the argument to [`AtomicPtr::new`].
+    pub unsafe fn swap_ptr(&self, ptr: *mut T) -> Option<Replaced<T, F, P>> {
+        let ptr = self.0.swap(ptr, Ordering::Release);
+        NonNull::new(ptr).map(|ptr| Replaced {
+            ptr,
+            _family: PhantomData::<F>,
+            _holder: PhantomData::<P>,
+        })
+    }
+
+    /// Stores `new` if the current pointer is `current`.
+    ///
+    /// The return value is a result indicating whether the new pointer was written and containing
+    /// the previous pointer. On success this value is guaranteed to be equal to `current`.
+    ///
+    /// # Safety
+    ///
+    /// `ptr must conform to the same safety requirements as the argument to [`AtomicPtr::new`].
+    pub unsafe fn compare_exchange_ptr(
+        &self,
+        current: *mut T,
+        new: *mut T,
+    ) -> Result<Option<Replaced<T, F, P>>, *mut T> {
+        let ptr = self
+            .0
+            .compare_exchange(current, new, Ordering::Release, Ordering::Relaxed)?;
+        Ok(NonNull::new(ptr).map(|ptr| Replaced {
+            ptr,
+            _family: PhantomData::<F>,
+            _holder: PhantomData::<P>,
+        }))
+    }
+
+    /// Stores `new` if the current pointer is `current`.
+    ///
+    /// Unlike [`AtomicPtr::compare_exchange`], this function is allowed to spuriously fail even
+    /// when the comparison succeeds, which can result in more efficient code on some platforms.
+    /// The return value is a result indicating whether the new pointer was written and containing
+    /// the previous pointer. On success this value is guaranteed to be equal to `current`.
+    ///
+    /// # Safety
+    ///
+    /// `ptr must conform to the same safety requirements as the argument to [`AtomicPtr::new`].
+    pub unsafe fn compare_exchange_weak_ptr(
+        &self,
+        current: *mut T,
+        new: *mut T,
+    ) -> Result<Option<Replaced<T, F, P>>, *mut T> {
+        let ptr =
+            self.0
+                .compare_exchange_weak(current, new, Ordering::Release, Ordering::Relaxed)?;
+        Ok(NonNull::new(ptr).map(|ptr| Replaced {
+            ptr,
+            _family: PhantomData::<F>,
+            _holder: PhantomData::<P>,
+        }))
+    }
+}

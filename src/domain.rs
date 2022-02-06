@@ -1,5 +1,6 @@
+use crate::raw::{Pointer, Reclaim};
+use crate::record::HazPtrRecord;
 use crate::sync::atomic::{AtomicIsize, AtomicPtr, AtomicUsize};
-use crate::{Deleter, HazPtrRecord, Reclaim};
 use alloc::boxed::Box;
 use alloc::collections::BTreeSet;
 use core::marker::PhantomData;
@@ -30,6 +31,14 @@ const IGNORED_LOW_BITS: u8 = 8;
 const SHARD_MASK: usize = NUM_SHARDS - 1;
 const LOCK_BIT: usize = 1;
 
+/// The singleton [domain family](Domain) for the global domain.
+///
+/// The global domain is a convenient way to amortize the overhead of memory reclamation across
+/// an entire program. Rather than being tied to any given [`Domain`] instance, all users of the
+/// global domain share a responsibility to reclaim retired objects, and are able to re-use each
+/// others' hazard pointers.
+///
+/// You can get a handle to the single global domain using [`Domain::global`].
 #[non_exhaustive]
 pub struct Global;
 impl Global {
@@ -57,7 +66,62 @@ impl<T> WithMut<T> for core::sync::atomic::AtomicPtr<T> {
     }
 }
 
-// Holds linked list of HazPtrRecords
+/// Synchronization point between hazard pointers and the writers they guard against.
+///
+/// Every [hazard pointer](crate::HazardPointer) is associated with a domain, and can only guard
+/// against reclamation of objects that are retired through that same domain. In other words, you
+/// should always ensure that your code uses the same domain to retire objects as it uses to make
+/// hazard pointers to read those objects. If it does not, the hazard pointers will provide no
+/// meaningful protection. This connection is part of the safety contract for
+/// [`HazardPointer::load`](HazardPointer::load).
+///
+/// ## Domain families
+///
+/// To help aid in determining that the same domain is used for loads and stores, every domain has
+/// an associated _domain family_ (`F`). The family serves no purpose beyond adding a statically
+/// checked guide so that obviously-incompatible domains aren't used. To take advantage of it, your
+/// code should define a new zero-sized type that you use every `F` appears, like so:
+///
+/// ```rust
+/// #[non_exhaustive]
+/// struct Family;
+///
+/// type Domain = haphazard::Domain<Family>;
+/// type HazardPointer<'domain> = haphazard::HazardPointer<'domain, Family>;
+/// type AtomicPtr<T> = haphazard::AtomicPtr<T, Family>;
+/// ```
+///
+/// This ensures at compile-time that you don't, for example, use a
+/// [`HazardPointer`](crate::HazardPointer) from the [global domain](Global) to guard loads from an
+/// [`AtomicPtr`](crate::AtomicPtr) that is tied to a custom domain.
+///
+/// This isn't bullet-proof though! Nothing prevents you from using hazard pointers allocated from
+/// one instance of `Domain<Family>` with an atomic pointer whose writers use a different
+/// _instance_ of `Domin<Family>`. So be careful!
+///
+/// The [`unique_domain`] macro provides a mechanism for constructing a domain with a unique
+/// domain family that cannot be confused with any other. If you can use it, you should do so, as
+/// it gives stronger static guarantees. However, it has the downside that you cannot name the
+/// return type (at least without [impl Trait in type
+/// aliases](https://github.com/rust-lang/rust/issues/63063)), which makes it difficult to store in
+/// other types.
+///
+/// ## Reclamation
+///
+/// Domains are the coordination mechanism used for reclamation. When an object is retired into a
+/// domain, the retiring thread will (sometimes) scan the domain for objects that are now safe to
+/// reclaim (i.e., drop). Objects that cannot yet be reclaimed because there are active readers are
+/// left in the domain for a later retire to check again. This means that there is generally a
+/// delay between when an object is retired (i.e., marked as deleted) and when it is actually
+/// reclaimed (i.e., [`drop`](core::mem::drop) is called). And if there are no more retires, the
+/// objects may not be reclaimed until the owning domain is itself dropped.
+///
+/// When using the [global domain](Global) to guard data access in your data structure, keep in
+/// mind that there is no guarantee that retired objects will be cleaned up by the time your data
+/// structure is dropped. As a result, you may need to require that the data you store in said data
+/// structure be `'static`. If you wish to avoid that bound, you'll need to construct your own
+/// `Domain` for each instance of your data structure so that all the guarded data is reclaimed
+/// when your data structure is dropped.
 pub struct Domain<F> {
     hazptrs: HazPtrRecords,
     untagged: [RetiredList; NUM_SHARDS],
@@ -70,11 +134,13 @@ pub struct Domain<F> {
 }
 
 impl Domain<Global> {
+    /// Get a handle to the singleton [global domain](Global).
     pub fn global() -> &'static Self {
         &SHARED_DOMAIN
     }
 }
 
+/// Generate a [`Domain`] with an entirely unique domain family.
 #[macro_export]
 macro_rules! unique_domain {
     () => {
@@ -90,9 +156,11 @@ macro_rules! new {
         /// The type checker protects you from accidentally using a `HazardPointer` from one domain
         /// _family_ (the type `F`) with an object protected by a domain in a different family.
         /// However, it does _not_ protect you from mixing up domains with the same family type.
-        /// Therefore, prefer creating domains with `unique_domain!` where possible, since it
+        /// Therefore, prefer creating domains with [`unique_domain`] where possible, since it
         /// guarantees a unique `F` for every domain.
-        pub $($decl)*(_: &F) -> Self {
+        ///
+        /// See the [`Domain`] documentation for more details.
+        pub $($decl)*(_: &'_ F) -> Self {
             // https://blog.rust-lang.org/2021/02/11/Rust-1.50.0.html#const-value-repetition-for-arrays
             #[cfg(not(loom))]
             let untagged = {
@@ -316,30 +384,43 @@ impl<F> Domain<F> {
         }
     }
 
+    /// Retire `ptr`, and reclaim it once it is safe to do so.
+    ///
     /// # Safety
     ///
-    /// ptr remains valid until `self` is dropped.
-    pub(crate) unsafe fn retire<'domain>(
-        &'domain self,
-        ptr: *mut (dyn Reclaim + 'domain),
-        deleter: &'static dyn Deleter,
-    ) -> usize {
+    /// 1. no [`HazardPointer`] will guard `ptr` from this point forward.
+    /// 2. `ptr` has not already been retired unless it has been reclaimed since then.
+    /// 3. `ptr` is valid as `&T` until `self` is dropped.
+    pub unsafe fn retire_ptr<T, P>(&self, ptr: *mut T) -> usize
+    where
+        P: Pointer<T>,
+    {
         // First, stick ptr onto the list of retired objects.
         //
         // Safety: ptr will not be accessed after Domain is dropped, which is when 'domain ends.
-        let retired = Box::new(unsafe { Retired::new(self, ptr, deleter) });
+        let retired = Box::new(unsafe {
+            Retired::new(self, ptr, |ptr: *mut dyn Reclaim| {
+                // Safety: the safety requirements of `from_raw` are the same as the ones to call
+                // the deleter.
+                let _ = P::from_raw(ptr as *mut T);
+            })
+        });
 
         self.push_list(retired)
     }
 
+    /// Reclaim as many retired objects as possible.
+    ///
+    /// Returns the number of retired objects that were reclaimed.
     pub fn eager_reclaim(&self) -> usize {
         self.nbulk_reclaims.fetch_add(1, Ordering::Acquire);
         self.do_reclamation(0)
     }
 
+    // Only used for tests -- waits for no outstanding reclaims.
+    #[doc(hidden)]
     pub fn cleanup(&self) {
-        self.nbulk_reclaims.fetch_add(1, Ordering::Acquire);
-        self.do_reclamation(0);
+        self.eager_reclaim();
         self.wait_for_zero_bulk_reclaims(); // wait for concurrent bulk_reclaim-s
     }
 
@@ -536,12 +617,13 @@ impl<F> Domain<F> {
             let next = unsafe { &*retired }.next.load(Ordering::Relaxed);
             let n = unsafe { Box::from_raw(retired) };
 
-            // Safety:
+            // We uphold the Pointer::from_raw guarantees since:
+            //
             //  - `n.ptr` has not yet been dropped because it was still on `retired`.
             //  - it will not be dropped again because we have removed it from `retired`.
             //  - `n.ptr` was allocated by the corresponding allocation method as per the
             //    safety guarantees of calling `retire`.
-            unsafe { n.deleter.delete(n.ptr) };
+            unsafe { (n.deleter)(n.ptr) };
 
             // TODO: Support linked nodes for more efficient deallocation (`children`).
 
@@ -639,7 +721,11 @@ struct HazPtrRecords {
 struct Retired {
     // This is + 'domain, which is enforced for anything that constructs a Retired
     ptr: *mut dyn Reclaim,
-    deleter: &'static dyn Deleter,
+    /// # Safety
+    ///
+    /// Safe to call when it would be safe to call `from_raw(ptr)` on the originating `Pointer`
+    /// type.
+    deleter: unsafe fn(ptr: *mut dyn Reclaim),
     next: AtomicPtr<Retired>,
 }
 
@@ -650,7 +736,7 @@ impl Retired {
     unsafe fn new<'domain, F>(
         _: &'domain Domain<F>,
         ptr: *mut (dyn Reclaim + 'domain),
-        deleter: &'static dyn Deleter,
+        deleter: unsafe fn(ptr: *mut dyn Reclaim),
     ) -> Self {
         Retired {
             ptr: unsafe { core::mem::transmute::<_, *mut (dyn Reclaim + 'static)>(ptr) },

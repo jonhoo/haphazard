@@ -1,7 +1,7 @@
 use haphazard::*;
 
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
-use std::sync::atomic::{AtomicPtr, AtomicUsize};
 use std::sync::Arc;
 
 struct CountDrops(Arc<AtomicUsize>);
@@ -17,14 +17,8 @@ fn acquires_multiple() {
 
     let domain = Domain::new(&());
 
-    let x = AtomicPtr::new(Box::into_raw(Box::new((
-        42,
-        CountDrops(Arc::clone(&drops_42)),
-    ))));
-    let y = AtomicPtr::new(Box::into_raw(Box::new((
-        42,
-        CountDrops(Arc::clone(&drops_42)),
-    ))));
+    let x = AtomicPtr::from(Box::new((42, CountDrops(Arc::clone(&drops_42)))));
+    let y = AtomicPtr::from(Box::new((42, CountDrops(Arc::clone(&drops_42)))));
 
     // As a reader:
     let mut hazptr_array = HazardPointer::many_in_domain(&domain);
@@ -33,23 +27,10 @@ fn acquires_multiple() {
     //
     //  1. AtomicPtr points to a Box, so is always valid.
     //  2. Writers to AtomicPtr use HazPtrObject::retire.
-    let [one, two] = hazptr_array.as_refs();
-    let my_x = unsafe { one.protect(&x) }.expect("not null");
-    let my_y = unsafe { two.protect(&y) }.expect("not null");
-
-    // valid:
-    assert_eq!(my_x.0, 42);
-    assert_eq!(my_y.0, 42);
-
-    hazptr_array.reset_protection();
-    // invalid:
-    // let _: i32 = my_x.0;
-    // let _: i32 = my_y.0;
-
-    let [my_x, my_y] = unsafe { hazptr_array.protect_all([&x, &y]) };
-
-    let my_x = my_x.expect("not null");
-    let my_y = my_y.expect("not null");
+    let [mut one, mut two] = hazptr_array.as_refs();
+    // Safety: everything that touches x uses `domain`
+    let my_x = unsafe { x.load(&mut one).expect("not null") };
+    let my_y = unsafe { y.load(&mut two).expect("not null") };
 
     // valid:
     assert_eq!(my_x.0, 42);
@@ -57,18 +38,18 @@ fn acquires_multiple() {
 
     drop(hazptr_array);
     // invalid:
-    // let _: i32 = my_y.0;
+    // let _: i32 = my_x.0;
     // invalid:
     // let _: i32 = my_y.0;
 
     domain.eager_reclaim();
     assert_eq!(drops_42.load(Ordering::SeqCst), 0);
 
-    unsafe { domain.retire_ptr::<_, Box<_>>(x.into_inner()) };
+    unsafe { x.retire_in(&domain) };
     domain.eager_reclaim();
     assert_eq!(drops_42.load(Ordering::SeqCst), 1);
 
-    unsafe { domain.retire_ptr::<_, Box<_>>(y.into_inner()) };
+    unsafe { y.retire_in(&domain) };
     domain.eager_reclaim();
     assert_eq!(drops_42.load(Ordering::SeqCst), 2);
 }
@@ -77,10 +58,7 @@ fn acquires_multiple() {
 fn feels_good() {
     let drops_42 = Arc::new(AtomicUsize::new(0));
 
-    let x = AtomicPtr::new(Box::into_raw(Box::new((
-        42,
-        CountDrops(Arc::clone(&drops_42)),
-    ))));
+    let x = AtomicPtr::from(Box::new((42, CountDrops(Arc::clone(&drops_42)))));
 
     // As a reader:
     let mut h = HazardPointer::new();
@@ -89,14 +67,14 @@ fn feels_good() {
     //
     //  1. AtomicPtr points to a Box, so is always valid.
     //  2. Writers to AtomicPtr use HazPtrObject::retire.
-    let my_x = unsafe { h.protect(&x) }.expect("not null");
+    let my_x = x.safe_load(&mut h).expect("not null");
     // valid:
     assert_eq!(my_x.0, 42);
     h.reset_protection();
     // invalid:
     // let _: i32 = my_x.0;
 
-    let my_x = unsafe { h.protect(&x) }.expect("not null");
+    let my_x = x.safe_load(&mut h).expect("not null");
     // valid:
     assert_eq!(my_x.0, 42);
     drop(h);
@@ -104,21 +82,20 @@ fn feels_good() {
     // let _: i32 = my_x.0;
 
     let mut h = HazardPointer::new();
-    let my_x = unsafe { h.protect(&x) }.expect("not null");
+    let my_x = x.safe_load(&mut h).expect("not null");
 
     let mut h_tmp = HazardPointer::new();
-    let _ = unsafe { h_tmp.protect(&x) }.expect("not null");
+    let _ = x.safe_load(&mut h_tmp).expect("not null");
     drop(h_tmp);
 
     // As a writer:
     let drops_9001 = Arc::new(AtomicUsize::new(0));
-    let old = x.swap(
-        Box::into_raw(Box::new((9001, CountDrops(Arc::clone(&drops_9001))))),
-        std::sync::atomic::Ordering::SeqCst,
-    );
+    let old = x
+        .swap(Box::new((9001, CountDrops(Arc::clone(&drops_9001)))))
+        .expect("not null");
 
     let mut h2 = HazardPointer::new();
-    let my_x2 = unsafe { h2.protect(&x) }.expect("not null");
+    let my_x2 = x.safe_load(&mut h2).expect("not null");
 
     assert_eq!(my_x.0, 42);
     assert_eq!(my_x2.0, 9001);
@@ -128,7 +105,7 @@ fn feels_good() {
     //  1. The pointer came from Box, so is valid.
     //  2. The old value is no longer accessible.
     //  3. The deleter is valid for Box types.
-    unsafe { Domain::global().retire_ptr::<_, Box<_>>(old) };
+    unsafe { old.retire() };
 
     assert_eq!(drops_42.load(Ordering::SeqCst), 0);
     assert_eq!(my_x.0, 42);
@@ -161,28 +138,25 @@ fn drop_domain() {
 
     let drops_42 = Arc::new(AtomicUsize::new(0));
 
-    let x = AtomicPtr::new(Box::into_raw(Box::new((
-        42,
-        CountDrops(Arc::clone(&drops_42)),
-    ))));
+    let x = AtomicPtr::from(Box::new((42, CountDrops(Arc::clone(&drops_42)))));
 
     // As a reader:
     let mut h = HazardPointer::new_in_domain(&domain);
-    let my_x = unsafe { h.protect(&x) }.expect("not null");
+    // Safety: everything touching `x` uses `domain`.
+    let my_x = unsafe { x.load(&mut h).expect("not null") };
     // valid:
     assert_eq!(my_x.0, 42);
 
     // As a writer:
     let drops_9001 = Arc::new(AtomicUsize::new(0));
-    let old = x.swap(
-        Box::into_raw(Box::new((9001, CountDrops(Arc::clone(&drops_9001))))),
-        std::sync::atomic::Ordering::SeqCst,
-    );
+    let old = x
+        .swap(Box::new((9001, CountDrops(Arc::clone(&drops_9001)))))
+        .expect("not null");
 
     assert_eq!(drops_42.load(Ordering::SeqCst), 0);
     assert_eq!(my_x.0, 42);
 
-    unsafe { domain.retire_ptr::<_, Box<_>>(old) };
+    unsafe { old.retire_in(&domain) };
 
     assert_eq!(drops_42.load(Ordering::SeqCst), 0);
     assert_eq!(my_x.0, 42);

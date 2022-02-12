@@ -1,4 +1,3 @@
-[![cargo test](https://github.com/jonhoo/haphazard/actions/workflows/test.yml/badge.svg)](https://github.com/jonhoo/haphazard/actions/workflows/test.yml)
 [![Codecov](https://codecov.io/github/jonhoo/haphazard/coverage.svg?branch=master)](https://codecov.io/gh/jonhoo/haphazard)
 [![Dependency status](https://deps.rs/repo/github/jonhoo/haphazard/status.svg)](https://deps.rs/repo/github/jonhoo/haphazard)
 

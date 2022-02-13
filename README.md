@@ -1,4 +1,6 @@
-[![Codecov](https://codecov.io/github/jonhoo/haphazard/coverage.svg?branch=master)](https://codecov.io/gh/jonhoo/haphazard)
+[![Crates.io](https://img.shields.io/crates/v/haphazard.svg)](https://crates.io/crates/haphazard)
+[![Documentation](https://docs.rs/haphazard/badge.svg)](https://docs.rs/haphazard/)
+[![codecov](https://codecov.io/gh/jonhoo/haphazard/branch/main/graph/badge.svg?token=8FYF6JKJ8W)](https://codecov.io/gh/jonhoo/haphazard)
 [![Dependency status](https://deps.rs/repo/github/jonhoo/haphazard/status.svg)](https://deps.rs/repo/github/jonhoo/haphazard)
 
 http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2021/p1121r3.pdf

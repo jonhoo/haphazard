@@ -8,7 +8,7 @@ license = "Apache-2.0"
 description = "Dynamic memory management for lock-free data structures using hazard pointers."
 repository = "https://github.com/jonhoo/haphazard.git"
 
-keywords = ["hazard pointers", "no_std", "garbage collection", "reclamation"]
+keywords = ["hazard-pointers", "no_std", "garbage-collection", "reclamation"]
 categories = ["concurrency", "memory-management", "no-std"]
 
 [features]

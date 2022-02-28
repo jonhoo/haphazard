@@ -821,52 +821,55 @@ fn foo() {
 */
 
 /// ```compile_fail
-/// use core::sync::atomic::AtomicPtr;
 /// use haphazard::*;
 /// let dw = Domain::global();
 /// let dr = Domain::new(&());
 ///
-/// let x = AtomicPtr::new(Box::into_raw(Box::new(HazPtrObjectWrapper::with_domain(&dw, 42))));
+/// let x: AtomicPtr<i32, Global> = AtomicPtr::from(Box::new(42));
 ///
 /// // Reader uses a different domain thant the writer!
-/// let mut h = HazardPointer::make_in_domain(&dr);
+/// let mut h = HazardPointer::new_in_domain(&dr);
 ///
 /// // This shouldn't compile because families differ.
-/// let _ = unsafe { h.protect(&x) }.expect("not null");
+/// let _ = unsafe { x.load(&mut h).expect("not null") };
 /// ```
 #[cfg(doctest)]
 struct CannotConfuseGlobalWriter;
 
 /// ```compile_fail
-/// use core::sync::atomic::AtomicPtr;
 /// use haphazard::*;
 /// let dw = Domain::new(&());
 /// let dr = Domain::global();
 ///
-/// let x = AtomicPtr::new(Box::into_raw(Box::new(HazPtrObjectWrapper::with_domain(&dw, 42))));
+/// let x: AtomicPtr<i32, ()> = AtomicPtr::from(Box::new(42));
 ///
 /// // Reader uses a different domain thant the writer!
-/// let mut h = HazardPointer::make_in_domain(&dr);
+/// let mut h = HazardPointer::new_in_domain(&dr);
 ///
 /// // This shouldn't compile because families differ.
-/// let _ = unsafe { h.protect(&x) }.expect("not null");
+/// let _ = unsafe { x.load(&mut h).expect("not null") };
 /// ```
 #[cfg(doctest)]
 struct CannotConfuseGlobalReader;
 
 /// ```compile_fail
-/// use core::sync::atomic::AtomicPtr;
 /// use haphazard::*;
 /// let dw = unique_domain!();
 /// let dr = unique_domain!();
 ///
-/// let x = AtomicPtr::new(Box::into_raw(Box::new(HazPtrObjectWrapper::with_domain(&dw, 42))));
+/// fn build_ptr_in_domain<T, F, P, B>(_: &Domain<F>, builder: B) -> AtomicPtr<T, F, P>
+/// where
+///     B: Fn() -> AtomicPtr<T, F, P>,
+/// {
+///     builder()
+/// }
+/// let x = build_ptr_in_domain(&dw, || AtomicPtr::from(Box::new(42)));
 ///
 /// // Reader uses a different domain thant the writer!
-/// let mut h = HazardPointer::make_in_domain(&dr);
+/// let mut h = HazardPointer::new_in_domain(&dr);
 ///
 /// // This shouldn't compile because families differ.
-/// let _ = unsafe { h.protect(&x) }.expect("not null");
+/// let _ = unsafe { x.load(&mut h).expect("not null") };
 /// ```
 #[cfg(doctest)]
 struct CannotConfuseAcrossFamilies;

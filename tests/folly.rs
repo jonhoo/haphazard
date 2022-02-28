@@ -10,9 +10,19 @@ pub struct Count {
     _retires: AtomicUsize,
 }
 
+#[cfg(miri)]
+extern "Rust" {
+    fn miri_static_root(ptr: *const u8);
+}
+
 impl Count {
     pub fn test_local() -> &'static Count {
-        Box::leak(Box::new(Self::default()))
+        let ptr = Box::leak(Box::new(Self::default()));
+        #[cfg(miri)]
+        unsafe {
+            miri_static_root(ptr as *const _ as *const u8);
+        }
+        ptr
     }
 
     pub fn ctors(&self) -> usize {

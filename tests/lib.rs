@@ -153,6 +153,11 @@ fn feels_good() {
     let n = Domain::global().eager_reclaim();
     assert_eq!(n, 0);
     assert_eq!(drops_9001.load(Ordering::SeqCst), 0);
+
+    unsafe { Domain::global().retire_ptr::<_, Box<_>>(x.into_inner()) };
+    let n = Domain::global().eager_reclaim();
+    assert_eq!(n, 1);
+    assert_eq!(drops_9001.load(Ordering::SeqCst), 1);
 }
 
 #[test]
@@ -199,5 +204,8 @@ fn drop_domain() {
     assert_eq!(drops_42.load(Ordering::SeqCst), 1);
 
     drop(h);
+
+    unsafe { Domain::global().retire_ptr::<_, Box<_>>(x.into_inner()) };
     drop(domain);
+    assert_eq!(drops_9001.load(Ordering::SeqCst), 1);
 }

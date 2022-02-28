@@ -105,6 +105,10 @@
 //! drop(h);
 //! let n = Domain::global().eager_reclaim();
 //! assert_eq!(n, 1);
+//!
+//! // Remember to also retire the item stored in the AtomicPtr when it's dropped
+//! // (assuming of course that the pointer is not shared elsewhere):
+//! unsafe { x.retire(); }
 //! ```
 //!
 //! # Differences from the specification
@@ -189,7 +193,11 @@ pub use hazard::{HazardPointer, HazardPointerArray};
 ///
 /// ```rust
 /// # use haphazard::AtomicPtr;
-/// let _: AtomicPtr<usize> = AtomicPtr::from(Box::new(42));
+/// let ptr: AtomicPtr<usize> = AtomicPtr::from(Box::new(42));
+///
+/// // Remember to retire the item stored in the AtomicPtr when it's dropped
+/// // (assuming of course that the pointer is not also shared elsewhere):
+/// unsafe { ptr.retire(); }
 /// ```
 ///
 /// Note the explicit use of `AtomicPtr<usize>`, which is needed to get the default values for the
@@ -201,6 +209,10 @@ pub use hazard::{HazardPointer, HazardPointerArray};
 ///
 /// This type has the same in-memory representation as a
 /// [`std::sync::AtomicPtr`](core::sync::AtomicPtr).
+///
+/// **Warning:** When this type is dropped, it does _not_ automatically retire the object it is
+/// currently pointing to. In order to retire (and eventually reclaim) that object, use
+/// [`AtomicPtr::retire_in`].
 ///
 /// **Note:** This type is only available on platforms that support atomic loads and stores of
 /// pointers. Its size depends on the target pointer’s size.

@@ -130,6 +130,17 @@ fn feels_good() {
     let n = Domain::global().eager_reclaim();
     assert_eq!(n, 0);
     assert_eq!(drops_9001.load(Ordering::SeqCst), 0);
+
+    // Safety:
+    //
+    //  1. There are no other pointers to *x.
+    //  2. We haven't already retired the swapped-in object.
+    //  3. Only one domain is in use in this test, which is the only one with `x`.
+    unsafe { x.retire() };
+
+    let n = Domain::global().eager_reclaim();
+    assert_eq!(n, 1);
+    assert_eq!(drops_9001.load(Ordering::SeqCst), 1);
 }
 
 #[test]
@@ -173,5 +184,8 @@ fn drop_domain() {
     assert_eq!(drops_42.load(Ordering::SeqCst), 1);
 
     drop(h);
+
+    unsafe { x.retire_in(&domain) };
     drop(domain);
+    assert_eq!(drops_9001.load(Ordering::SeqCst), 1);
 }

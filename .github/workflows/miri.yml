@@ -30,4 +30,4 @@ jobs:
           # (https://github.com/rust-lang/rust/pull/80236), but we also need
           # atomic exchange internally. See also
           # https://github.com/rust-lang/miri/issues/1574.
-          MIRIFLAGS: "-Zmiri-ignore-leaks -Zmiri-disable-isolation"
+          MIRIFLAGS: "-Zmiri-ignore-leaks"

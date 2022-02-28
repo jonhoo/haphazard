@@ -641,12 +641,12 @@ impl<F> Domain<F> {
         }
     }
 
-    #[cfg(loom)]
+    #[cfg(any(loom, miri))]
     fn now() -> u64 {
         0
     }
 
-    #[cfg(all(feature = "std", target_pointer_width = "64", not(loom)))]
+    #[cfg(all(feature = "std", target_pointer_width = "64", not(loom), not(miri)))]
     fn now() -> u64 {
         u64::try_from(
             std::time::SystemTime::now()

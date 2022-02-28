@@ -143,7 +143,6 @@ mod pointer;
 mod record;
 mod sync;
 
-
 /// Raw building blocks for managing hazard pointers.
 pub mod raw {
     pub use crate::domain::Domain;

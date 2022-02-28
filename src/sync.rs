@@ -22,10 +22,22 @@ pub(crate) mod atomic {
     pub use core::sync::atomic::AtomicU64;
     pub(crate) use core::sync::atomic::{AtomicIsize, AtomicPtr, AtomicUsize, Ordering};
 
+    #[cfg(miri)]
+    pub fn light_barrier() {
+        core::sync::atomic::fence(Ordering::SeqCst)
+    }
+
+    #[cfg(miri)]
+    pub fn heavy_barrier() {
+        core::sync::atomic::fence(Ordering::SeqCst)
+    }
+
+    #[cfg(not(miri))]
     pub fn light_barrier() {
         membarrier::light()
     }
 
+    #[cfg(not(miri))]
     pub fn heavy_barrier() {
         membarrier::heavy()
     }

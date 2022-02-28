@@ -3,7 +3,7 @@ compile_error!("loom requires the standard library");
 
 #[cfg(loom)]
 pub(crate) mod atomic {
-    pub(crate) use loom::sync::atomic::{fence, AtomicIsize, AtomicPtr, AtomicU64, AtomicUsize};
+    pub(crate) use loom::sync::atomic::{fence, AtomicIsize, AtomicPtr, AtomicUsize};
 }
 #[cfg(loom)]
 pub(crate) use loom::thread::yield_now;

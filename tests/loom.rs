@@ -50,12 +50,14 @@ impl Count {
     }
 }
 
+#[allow(unused)]
 struct Node {
     count: &'static Count,
     val: usize,
     next: AtomicPtr<Node>,
 }
 
+#[allow(dead_code)]
 impl Node {
     fn new(count: &'static Count, val: usize, next: *mut Node) -> Self {
         count.ctors.fetch_add(1, Ordering::AcqRel);
@@ -150,7 +152,7 @@ fn single_reader_protection() {
         let x1 = Arc::clone(&x);
         let t1 = thread::spawn(move || {
             let mut h = HazardPointer::new();
-            let my_x = x1.load(&mut h).expect("not null");
+            let my_x = unsafe { x1.load(&mut h) }.expect("not null");
 
             // Now we can let the writer change things.
             tx.send(()).unwrap();
@@ -195,7 +197,7 @@ fn multi_reader_protection() {
         let tx1 = tx.clone();
         let t1 = thread::spawn(move || {
             let mut h = HazardPointer::new();
-            let my_x = x1.load(&mut h).expect("not null");
+            let my_x = unsafe { x1.load(&mut h) }.expect("not null");
 
             // Now we can let the writer change things.
             tx1.send(()).unwrap();
@@ -207,7 +209,7 @@ fn multi_reader_protection() {
         let tx2 = tx.clone();
         let t2 = thread::spawn(move || {
             let mut h = HazardPointer::new();
-            let my_x = x2.load(&mut h).expect("not null");
+            let my_x = unsafe { x2.load(&mut h) }.expect("not null");
 
             // Now we can let the writer change things.
             tx2.send(()).unwrap();

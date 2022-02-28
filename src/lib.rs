@@ -167,11 +167,11 @@ pub mod raw {
     pub use crate::pointer::{Pointer, Reclaim};
 }
 
-use std::marker::PhantomData;
-use std::ops::Deref;
-use std::ops::DerefMut;
-use std::ptr::NonNull;
-use std::sync::atomic::Ordering;
+use core::marker::PhantomData;
+use core::ops::Deref;
+use core::ops::DerefMut;
+use core::ptr::NonNull;
+use core::sync::atomic::Ordering;
 
 pub use domain::Domain;
 pub use domain::Global;

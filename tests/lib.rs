@@ -205,7 +205,7 @@ fn drop_domain() {
 
     drop(h);
 
-    unsafe { Domain::global().retire_ptr::<_, Box<_>>(x.into_inner()) };
+    unsafe { domain.retire_ptr::<_, Box<_>>(x.into_inner()) };
     drop(domain);
     assert_eq!(drops_9001.load(Ordering::SeqCst), 1);
 }

@@ -358,13 +358,14 @@ where
     /// Note that requirement #3 is _partially_ enforced by the domain family (`F`), but it's on
     /// you to ensure that you don't "cross the streams" between multiple `Domain<F>`, if those can
     /// arise in your application.
-    pub unsafe fn retire_in(mut self, domain: &Domain<F>) -> usize {
+    pub unsafe fn retire_in(self, domain: &Domain<F>) -> usize {
         // Safety:
         //
         // 1. implied by our #1 and #3: if load won't return it, there's no other way to guard it
         // 2. implied by our #2
         // 3. implied by AtomicPtr::new's #1 and #3
-        unsafe { domain.retire_ptr::<T, P>(self.ptr.as_mut()) }
+        let ptr = self.ptr.as_ptr();
+        unsafe { domain.retire_ptr::<T, P>(ptr) }
     }
 }
 

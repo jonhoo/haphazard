@@ -1,3 +1,5 @@
+use alloc::boxed::Box;
+
 /// Trait for types that can be dropped (which is all of them).
 ///
 /// This trait exists solely as a workaround for the fact that only types with an explicit `Drop`
@@ -22,7 +24,7 @@ impl<T> Reclaim for T {}
 ///    after an eventual call to `from_raw`.
 pub unsafe trait Pointer<T>
 where
-    Self: Sized + std::ops::Deref<Target = T>,
+    Self: Sized + core::ops::Deref<Target = T>,
 {
     /// Extract the raw pointer referenced by `self`.
     fn into_raw(self) -> *mut T;

@@ -219,7 +219,7 @@ pub use hazard::{HazardPointer, HazardPointerArray};
 //  - copy_and_move test.
 //  - requires double-retire protection?
 #[repr(transparent)]
-pub struct AtomicPtr<T, F = domain::Global, P = Box<T>>(
+pub struct AtomicPtr<T, F = domain::Global, P = alloc::boxed::Box<T>>(
     crate::sync::atomic::AtomicPtr<T>,
     PhantomData<(F, *mut P)>,
 );

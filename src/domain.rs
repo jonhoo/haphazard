@@ -133,9 +133,19 @@ pub struct Domain<F> {
     shutdown: bool,
 }
 
+#[cfg(miri)]
+extern "Rust" {
+    fn miri_static_root(ptr: *const u8);
+}
+
 impl Domain<Global> {
     /// Get a handle to the singleton [global domain](Global).
     pub fn global() -> &'static Self {
+        #[cfg(miri)]
+        unsafe {
+            miri_static_root(&SHARED_DOMAIN as *const _ as *const u8);
+        };
+
         &SHARED_DOMAIN
     }
 }

@@ -179,6 +179,7 @@ use core::sync::atomic::Ordering;
 
 pub use domain::Domain;
 pub use domain::Global;
+pub use domain::Singleton;
 pub use hazard::{HazardPointer, HazardPointerArray};
 
 /// A managed pointer type which can be safely shared between threads.
@@ -381,25 +382,27 @@ where
     }
 }
 
-impl<T, P> AtomicPtr<T, domain::Global, P> {
+impl<T, F, P> AtomicPtr<T, F, P> {
     /// Loads the value from the stored pointer and guards it using the given hazard pointer.
     ///
     /// The guard ensures that the loaded `T` will remain valid for as long as you hold a reference
     /// to it.
     ///
-    /// Note that this method is _only_ available when using [`Domain<Global>`](domain::Global),
-    /// since it is a singleton, and thus is guaranteed to fulfill the safety requirement of
-    /// [`AtomicPtr::load`]. For all other domains, use [`AtomicPtr::load`].
-    pub fn safe_load<'hp>(
+    /// This method is a safe alternative to [`AtomicPtr::load`] available to 
+    /// [`Domain::Singleton`](singleton families) since it is a singleton, and thus 
+    /// is guaranteed to fulfill the safety requirement of [`AtomicPtr::load`]
+    pub fn safe_load<'hp, 'd>(
         &'_ self,
-        hp: &'hp mut HazardPointer<'static, domain::Global>,
+        hp: &'hp mut HazardPointer<'d, F>,
     ) -> Option<&'hp T>
     where
         T: 'hp,
+        F: 'static,
+        F: Singleton,
     {
-        // Safety: since there is exactly one Domain<Global>, we know that all calls to `load` that
-        // have returned this object must have been using the same (global) domain as we're
-        // retiring to.
+        // Safety: by the safify garanties of Domain::Singleton there is exactly one domain of 
+        // this family, we know that all calls to `load` that have returned this object must have been 
+        // using the same domain as we're retiring to.
         unsafe { self.load(hp) }
     }
 }

@@ -47,6 +47,19 @@ impl Global {
     }
 }
 
+
+/// Mark a [domain family](Domain) that unique caracterize a [domain instance](Domain)
+/// 
+/// See [`Global`] and [`unique_domain`]
+/// 
+/// # Safety
+///
+/// Implementors of this trait must guarantee only one Domain of that family can be contructed.
+pub unsafe trait Singleton {}
+
+// Safety: there are only one instance of Domain<Global>
+unsafe impl Singleton for Global {}
+
 #[cfg(not(loom))]
 static SHARED_DOMAIN: Domain<Global> = Domain::new(&Global::new());
 
@@ -151,10 +164,17 @@ impl Domain<Global> {
 }
 
 /// Generate a [`Domain`] with an entirely unique domain family.
+/// The generated family implements [`Singleton`], 
 #[macro_export]
 macro_rules! unique_domain {
     () => {
-        Domain::new(&|| {})
+        {
+            struct UniqueFamily;
+            // Safety: UniqueFamily is only visible inside this scope, 
+            // therefore no other Domain of that family can be constructed.
+            unsafe impl Singleton for UniqueFamily {}
+            Domain::new(&UniqueFamily)
+        }
     };
 }
 
@@ -879,7 +899,7 @@ struct CannotConfuseGlobalReader;
 /// let mut h = HazardPointer::new_in_domain(&dr);
 ///
 /// // This shouldn't compile because families differ.
-/// let _ = unsafe { x.load(&mut h).expect("not null") };
+/// let _ = x.safe_load(&mut h).expect("not null");
 /// ```
 #[cfg(doctest)]
 struct CannotConfuseAcrossFamilies;

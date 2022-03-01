@@ -47,11 +47,10 @@ impl Global {
     }
 }
 
-
 /// Mark a [domain family](Domain) that unique caracterize a [domain instance](Domain)
-/// 
+///
 /// See [`Global`] and [`unique_domain`]
-/// 
+///
 /// # Safety
 ///
 /// Implementors of this trait must guarantee only one Domain of that family can be contructed.
@@ -164,18 +163,16 @@ impl Domain<Global> {
 }
 
 /// Generate a [`Domain`] with an entirely unique domain family.
-/// The generated family implements [`Singleton`], 
+/// The generated family implements [`Singleton`],
 #[macro_export]
 macro_rules! unique_domain {
-    () => {
-        {
-            struct UniqueFamily;
-            // Safety: UniqueFamily is only visible inside this scope, 
-            // therefore no other Domain of that family can be constructed.
-            unsafe impl Singleton for UniqueFamily {}
-            Domain::new(&UniqueFamily)
-        }
-    };
+    () => {{
+        struct UniqueFamily;
+        // Safety: UniqueFamily is only visible inside this scope,
+        // therefore no other Domain of that family can be constructed.
+        unsafe impl Singleton for UniqueFamily {}
+        Domain::new(&UniqueFamily)
+    }};
 }
 
 // Macro to make new const only when not in loom.

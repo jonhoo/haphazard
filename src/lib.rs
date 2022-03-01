@@ -388,20 +388,17 @@ impl<T, F, P> AtomicPtr<T, F, P> {
     /// The guard ensures that the loaded `T` will remain valid for as long as you hold a reference
     /// to it.
     ///
-    /// This method is a safe alternative to [`AtomicPtr::load`] available to 
-    /// [`Domain::Singleton`](singleton families) since it is a singleton, and thus 
+    /// This method is a safe alternative to [`AtomicPtr::load`] available to
+    /// [`Domain::Singleton`](singleton families) since it is a singleton, and thus
     /// is guaranteed to fulfill the safety requirement of [`AtomicPtr::load`]
-    pub fn safe_load<'hp, 'd>(
-        &'_ self,
-        hp: &'hp mut HazardPointer<'d, F>,
-    ) -> Option<&'hp T>
+    pub fn safe_load<'hp, 'd>(&'_ self, hp: &'hp mut HazardPointer<'d, F>) -> Option<&'hp T>
     where
         T: 'hp,
         F: 'static,
         F: Singleton,
     {
-        // Safety: by the safify garanties of Domain::Singleton there is exactly one domain of 
-        // this family, we know that all calls to `load` that have returned this object must have been 
+        // Safety: by the safify garanties of Domain::Singleton there is exactly one domain of
+        // this family, we know that all calls to `load` that have returned this object must have been
         // using the same domain as we're retiring to.
         unsafe { self.load(hp) }
     }

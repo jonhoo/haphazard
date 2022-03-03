@@ -830,21 +830,6 @@ fn int_to_ptr_with_provenance<T>(addr: usize, prov: *mut T) -> *mut T {
     ptr.wrapping_add(addr.wrapping_sub(ptr as usize)).cast()
 }
 
-/*
-fn foo() {
-    let domain = Domain::new();
-    'a: {
-        let d: &'a Domain = &domain;
-        let t = String::new();
-        let z: Box<PrintOnDrop<&'a String>> = Box::new(PrintOnDrop(&t));
-        d.retire(z); // z goes on .retired, but is _not_ dropped
-        // drop(t), so z is no longer valid
-    }
-    // walk .retired, find that z can be reclaimed, call drop(z);
-    drop(domain);
-}
-*/
-
 /// ```compile_fail
 /// use haphazard::*;
 /// let dw = Domain::global();

@@ -382,24 +382,27 @@ where
     }
 }
 
-impl<T, F, P> AtomicPtr<T, F, P> {
+impl<T, F, P> AtomicPtr<T, F, P>
+where
+    F: Singleton,
+{
     /// Loads the value from the stored pointer and guards it using the given hazard pointer.
     ///
     /// The guard ensures that the loaded `T` will remain valid for as long as you hold a reference
     /// to it.
     ///
-    /// This method is a safe alternative to [`AtomicPtr::load`] available to
-    /// [`Domain::Singleton`](singleton families) since it is a singleton, and thus
-    /// is guaranteed to fulfill the safety requirement of [`AtomicPtr::load`]
+    /// It's safe for domains with __singleton families__, because the
+    /// [`Domain::Singleton`](unsafety of the trait) guarantees that there is only ever one
+    /// instance of a Domain with a singleton family, and therefore loads and stores using such a
+    /// family must be using the same (single) instance of that domain.
     pub fn safe_load<'hp, 'd>(&'_ self, hp: &'hp mut HazardPointer<'d, F>) -> Option<&'hp T>
     where
         T: 'hp,
         F: 'static,
-        F: Singleton,
     {
-        // Safety: by the safify garanties of Domain::Singleton there is exactly one domain of
-        // this family, we know that all calls to `load` that have returned this object must have been
-        // using the same domain as we're retiring to.
+        // Safety: by the safety guarantees of Domain::Singleton there is exactly one domain of
+        // this family, we know that all calls to `load` that have returned this object must
+        // have been using the same domain as we're retiring to.
         unsafe { self.load(hp) }
     }
 }

@@ -56,7 +56,9 @@ impl Global {
 /// Implementors of this trait must guarantee only one Domain of that family can be contructed.
 pub unsafe trait Singleton {}
 
-// Safety: there are only one instance of Domain<Global>
+// Safety: we can guarantee that there's only ever one Domain<Global> because Global itself is not
+// possible to construct outside of this crate (due to #[non_exhaustive] + no public constructor),
+// and we only ever construct one Domain from it internally in the form of a single static.
 unsafe impl Singleton for Global {}
 
 #[cfg(not(loom))]
@@ -168,8 +170,7 @@ impl Domain<Global> {
 macro_rules! unique_domain {
     () => {{
         struct UniqueFamily;
-        // Safety: UniqueFamily is only visible inside this scope,
-        // therefore no other Domain of that family can be constructed.
+        // Safety: nowhere else can construct an instance of UniqueFamily to pass to Domain::new.
         unsafe impl Singleton for UniqueFamily {}
         Domain::new(&UniqueFamily)
     }};

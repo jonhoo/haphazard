@@ -136,6 +136,7 @@ impl<T> WithMut<T> for core::sync::atomic::AtomicPtr<T> {
 /// structure be `'static`. If you wish to avoid that bound, you'll need to construct your own
 /// `Domain` for each instance of your data structure so that all the guarded data is reclaimed
 /// when your data structure is dropped.
+#[non_exhaustive]
 pub struct Domain<F> {
     hazptrs: HazPtrRecords,
     untagged: [RetiredList; NUM_SHARDS],

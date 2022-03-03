@@ -186,7 +186,7 @@ macro_rules! new {
             Self {
                 hazptrs: HazPtrRecords {
                     head: AtomicPtr::new(core::ptr::null_mut()),
-                    head_available: AtomicUsize::new(0),
+                    head_available: AtomicPtr::new(core::ptr::null_mut()),
                     count: AtomicIsize::new(0),
                 },
                 untagged,
@@ -257,24 +257,28 @@ impl<F> Domain<F> {
 
         loop {
             let avail = self.hazptrs.head_available.load(Ordering::Acquire);
-            if avail == core::ptr::null::<HazPtrRecord>() as usize {
-                return (core::ptr::null_mut(), 0);
+            if avail.is_null() {
+                return (avail, 0);
             }
-            debug_assert_ne!(avail, core::ptr::null::<HazPtrRecord>() as usize | LOCK_BIT);
+            debug_assert_ne!(avail, LOCK_BIT as *mut _);
             if (avail as usize & LOCK_BIT) == 0 {
-                // Definitely a valid pointer now.
-                let avail: *const HazPtrRecord = avail as _;
-
                 // The available list is not currently locked.
                 //
                 // XXX: This could be a fetch_or and allow progress even if there's a new (but
-                // unlocked) head.
+                // unlocked) head. However, `AtomicPtr` doesn't support fetch_or at the moment, so
+                // we'd have to convert it to an `AtomicUsize`. This will in turn make Miri fail
+                // (with -Zmiri-tag-raw-pointers, which we want enabled) to track the provenance of
+                // the pointer in question through the int-to-ptr conversion. The workaround is
+                // probably to mock a type that is `AtomicUsize` with `fetch_or` with
+                // `#[cfg(not(miri))]`, but is `AtomicPtr` with `compare_exchange` with
+                // `#[cfg(miri)]`. It ain't pretty, but should do the job. The issue is tracked in
+                // https://github.com/rust-lang/miri/issues/1993.
                 if self
                     .hazptrs
                     .head_available
                     .compare_exchange_weak(
-                        avail as usize,
-                        avail as usize | LOCK_BIT,
+                        avail,
+                        with_lock_bit(avail),
                         Ordering::AcqRel,
                         Ordering::Relaxed,
                     )
@@ -317,9 +321,7 @@ impl<F> Domain<F> {
         }
 
         // NOTE: This releases the lock
-        self.hazptrs
-            .head_available
-            .store(next as usize, Ordering::Release);
+        self.hazptrs.head_available.store(next, Ordering::Release);
         unsafe { &*tail }
             .available_next
             .store(core::ptr::null_mut(), Ordering::Relaxed);
@@ -335,7 +337,7 @@ impl<F> Domain<F> {
         debug_assert_eq!(head as *const _ as usize & LOCK_BIT, 0);
         loop {
             let avail = self.hazptrs.head_available.load(Ordering::Acquire);
-            if (avail & LOCK_BIT) == 0 {
+            if (avail as usize & LOCK_BIT) == 0 {
                 tail.available_next
                     .store(avail as *mut _, Ordering::Relaxed);
                 if self
@@ -343,7 +345,7 @@ impl<F> Domain<F> {
                     .head_available
                     .compare_exchange_weak(
                         avail,
-                        head as *const _ as usize,
+                        head as *const _ as *mut _,
                         Ordering::AcqRel,
                         Ordering::Relaxed,
                     )
@@ -724,7 +726,7 @@ impl<F> Drop for Domain<F> {
 
 struct HazPtrRecords {
     head: AtomicPtr<HazPtrRecord>,
-    head_available: AtomicUsize, // really *mut HazPtrRecord
+    head_available: AtomicPtr<HazPtrRecord>,
     count: AtomicIsize,
 }
 
@@ -813,6 +815,19 @@ impl RetiredList {
     fn is_empty(&self) -> bool {
         self.head.load(Ordering::Relaxed).is_null()
     }
+}
+
+// Helpers to set and unset the lock bit on a `*mut HazPtrRecord` without losing pointer
+// provenance. See https://github.com/rust-lang/miri/issues/1993 for details.
+fn with_lock_bit(ptr: *mut HazPtrRecord) -> *mut HazPtrRecord {
+    int_to_ptr_with_provenance(ptr as usize | LOCK_BIT, ptr)
+}
+fn without_lock_bit(ptr: *mut HazPtrRecord) -> *mut HazPtrRecord {
+    int_to_ptr_with_provenance(ptr as usize & !LOCK_BIT, ptr)
+}
+fn int_to_ptr_with_provenance<T>(addr: usize, prov: *mut T) -> *mut T {
+    let ptr = prov.cast::<u8>();
+    ptr.wrapping_add(addr.wrapping_sub(ptr as usize)).cast()
 }
 
 /*

@@ -391,17 +391,18 @@ where
     /// The guard ensures that the loaded `T` will remain valid for as long as you hold a reference
     /// to it.
     ///
-    /// It's safe for domains with __singleton families__, because the
-    /// [`Domain::Singleton`](unsafety of the trait) guarantees that there is only ever one
-    /// instance of a Domain with a singleton family, and therefore loads and stores using such a
-    /// family must be using the same (single) instance of that domain.
+    /// This method is only available for domains with _singleton families_, because
+    /// implementations of the unsafe [`Domain::Singleton`] trait guarantee that there
+    /// is only ever one instance of a Domain with the family in question, which in turn
+    /// implies that loads and stores using such a family **must** be using the same
+    /// (single) instance of that domain.
     pub fn safe_load<'hp, 'd>(&'_ self, hp: &'hp mut HazardPointer<'d, F>) -> Option<&'hp T>
     where
         T: 'hp,
         F: 'static,
     {
         // Safety: by the safety guarantees of Domain::Singleton there is exactly one domain of
-        // this family, we know that all calls to `load` that have returned this object must
+        // this family, so we know that all calls to `load` that have returned this object must
         // have been using the same domain as we're retiring to.
         unsafe { self.load(hp) }
     }

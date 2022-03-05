@@ -47,13 +47,13 @@ impl Global {
     }
 }
 
-/// Mark a [domain family](Domain) that unique caracterize a [domain instance](Domain)
+/// Marks a [domain family](Domain) that uniquely characterizes a [domain instance](Domain).
 ///
-/// See [`Global`] and [`unique_domain`]
+/// See [`Global`] and [`unique_domain`] for examples of families that safely manage this.
 ///
 /// # Safety
 ///
-/// Implementors of this trait must guarantee only one Domain of that family can be contructed.
+/// Implementors of this trait must guarantee only one Domain of the implementing family can ever be constructed.
 pub unsafe trait Singleton {}
 
 // Safety: we can guarantee that there's only ever one Domain<Global> because Global itself is not
@@ -166,7 +166,8 @@ impl Domain<Global> {
 }
 
 /// Generate a [`Domain`] with an entirely unique domain family.
-/// The generated family implements [`Singleton`],
+///
+/// The generated family implements [`Singleton`], which enables the use of [`AtomicPtr::safe_load`].
 #[macro_export]
 macro_rules! unique_domain {
     () => {{

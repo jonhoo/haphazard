@@ -47,6 +47,20 @@ impl Global {
     }
 }
 
+/// Marks a [domain family](Domain) that uniquely characterizes a [domain instance](Domain).
+///
+/// See [`Global`] and [`unique_domain`] for examples of families that safely manage this.
+///
+/// # Safety
+///
+/// Implementors of this trait must guarantee only one Domain of the implementing family can ever be constructed.
+pub unsafe trait Singleton {}
+
+// Safety: we can guarantee that there's only ever one Domain<Global> because Global itself is not
+// possible to construct outside of this crate (due to #[non_exhaustive] + no public constructor),
+// and we only ever construct one Domain from it internally in the form of a single static.
+unsafe impl Singleton for Global {}
+
 #[cfg(not(loom))]
 static SHARED_DOMAIN: Domain<Global> = Domain::new(&Global::new());
 
@@ -151,11 +165,16 @@ impl Domain<Global> {
 }
 
 /// Generate a [`Domain`] with an entirely unique domain family.
+///
+/// The generated family implements [`Singleton`], which enables the use of [`AtomicPtr::safe_load`].
 #[macro_export]
 macro_rules! unique_domain {
-    () => {
-        Domain::new(&|| {})
-    };
+    () => {{
+        struct UniqueFamily;
+        // Safety: nowhere else can construct an instance of UniqueFamily to pass to Domain::new.
+        unsafe impl Singleton for UniqueFamily {}
+        Domain::new(&UniqueFamily)
+    }};
 }
 
 // Macro to make new const only when not in loom.
@@ -879,7 +898,7 @@ struct CannotConfuseGlobalReader;
 /// let mut h = HazardPointer::new_in_domain(&dr);
 ///
 /// // This shouldn't compile because families differ.
-/// let _ = unsafe { x.load(&mut h).expect("not null") };
+/// let _ = x.safe_load(&mut h).expect("not null");
 /// ```
 #[cfg(doctest)]
 struct CannotConfuseAcrossFamilies;

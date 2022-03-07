@@ -179,6 +179,7 @@ use core::sync::atomic::Ordering;
 
 pub use domain::Domain;
 pub use domain::Global;
+pub use domain::Singleton;
 pub use hazard::{HazardPointer, HazardPointerArray};
 
 /// A managed pointer type which can be safely shared between threads.
@@ -381,25 +382,28 @@ where
     }
 }
 
-impl<T, P> AtomicPtr<T, domain::Global, P> {
+impl<T, F, P> AtomicPtr<T, F, P>
+where
+    F: Singleton,
+{
     /// Loads the value from the stored pointer and guards it using the given hazard pointer.
     ///
     /// The guard ensures that the loaded `T` will remain valid for as long as you hold a reference
     /// to it.
     ///
-    /// Note that this method is _only_ available when using [`Domain<Global>`](domain::Global),
-    /// since it is a singleton, and thus is guaranteed to fulfill the safety requirement of
-    /// [`AtomicPtr::load`]. For all other domains, use [`AtomicPtr::load`].
-    pub fn safe_load<'hp>(
-        &'_ self,
-        hp: &'hp mut HazardPointer<'static, domain::Global>,
-    ) -> Option<&'hp T>
+    /// This method is only available for domains with _singleton families_, because
+    /// implementations of the unsafe [`Domain::Singleton`] trait guarantee that there
+    /// is only ever one instance of a Domain with the family in question, which in turn
+    /// implies that loads and stores using such a family **must** be using the same
+    /// (single) instance of that domain.
+    pub fn safe_load<'hp, 'd>(&'_ self, hp: &'hp mut HazardPointer<'d, F>) -> Option<&'hp T>
     where
         T: 'hp,
+        F: 'static,
     {
-        // Safety: since there is exactly one Domain<Global>, we know that all calls to `load` that
-        // have returned this object must have been using the same (global) domain as we're
-        // retiring to.
+        // Safety: by the safety guarantees of Domain::Singleton there is exactly one domain of
+        // this family, so we know that all calls to `load` that have returned this object must
+        // have been using the same domain as we're retiring to.
         unsafe { self.load(hp) }
     }
 }

@@ -20,7 +20,7 @@ use core::sync::atomic::Ordering;
 /// `F` is a _domain family_, which helps enforce that statically. Families are discussed in the
 /// documentation for [`Domain`]. `F` defaults to the [global domain](crate::Global).
 ///
-/// If you want a (slightly) higher-level interface, use [`haphazard::AtomicPtr`].
+/// If you want a (slightly) higher-level interface, use [`AtomicPtr`].
 ///
 /// If you need to protect multiple referenced objects at the same time, use
 /// [`HazardPointerArray`].
@@ -81,8 +81,8 @@ impl<'domain, F> HazardPointer<'domain, F> {
     /// # Safety
     ///
     /// 1. The value loaded from `AtomicPtr` is a valid `&T`, or null.
-    /// 2. The loaded `&T` will only be deallocated through calls to [`HazPtrObject::retire`] on
-    ///    the same [`Domain`] as this holder is associated with.
+    /// 2. The loaded `&T` will only be deallocated through calls to `retire` functions on the same
+    ///    [`Domain`] as this holder is associated with.
     pub unsafe fn protect<'l, T>(&'l mut self, src: &'_ AtomicPtr<T>) -> Option<&'l T>
     where
         F: 'static,
@@ -155,8 +155,8 @@ impl<'domain, F> HazardPointer<'domain, F> {
     /// # Safety
     ///
     /// 1. The value loaded from `AtomicPtr` is a valid `&T`, or null.
-    /// 2. The loaded `&T` will only be deallocated through calls to [`HazPtrObject::retire`] on
-    ///    the same [`Domain`] as this holder is associated with.
+    /// 2. The loaded `&T` will only be deallocated through calls to `retire` functions on the same
+    ///    [`Domain`] as this holder is associated with.
     pub unsafe fn try_protect<'l, T>(
         &'l mut self,
         ptr: *mut T,
@@ -262,8 +262,8 @@ impl<F> Drop for HazardPointer<'_, F> {
 /// let _ = HazardPointer::many_in_domain::<4>(haphazard::Domain::global());
 /// ```
 ///
-/// To use the individual hazard pointers, use [`HazardPointerArray::pointers`], or protect
-/// multiple [`AtomicPtr`]s using [`HazardPointerArray::protect_all`].
+/// To use the individual hazard pointers, use [`HazardPointerArray::as_refs`], or protect multiple
+/// [`AtomicPtr`]s using [`HazardPointerArray::protect_all`].
 pub struct HazardPointerArray<'domain, F, const N: usize> {
     // ManuallyDrop is required to prevent the HazardPointer from reclaiming itself, since
     // HazardPointerArray has it's own drop implementation with an optimized reclaim for all hazard
@@ -314,8 +314,8 @@ impl<'domain, F, const N: usize> HazardPointerArray<'domain, F, N> {
     /// # Safety
     ///
     /// 1. The values loaded each `AtomicPtr` are all valid `&T`, or null.
-    /// 2. The loaded `&T`s will only be deallocated through calls to [`HazPtrObject::retire`] on
-    ///    the same [`Domain`] as this holder array is associated with.
+    /// 2. The loaded `&T` will only be deallocated through calls to `retire` functions on the same
+    ///    [`Domain`] as this holder is associated with.
     pub unsafe fn protect_all<'l, T>(
         &'l mut self,
         mut sources: [&'_ AtomicPtr<T>; N],

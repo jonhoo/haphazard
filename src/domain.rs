@@ -87,7 +87,7 @@ impl<T> WithMut<T> for core::sync::atomic::AtomicPtr<T> {
 /// should always ensure that your code uses the same domain to retire objects as it uses to make
 /// hazard pointers to read those objects. If it does not, the hazard pointers will provide no
 /// meaningful protection. This connection is part of the safety contract for
-/// [`HazardPointer::load`](HazardPointer::load).
+/// [`HazardPointer::protect`](crate::HazardPointer::protect).
 ///
 /// ## Domain families
 ///
@@ -166,7 +166,8 @@ impl Domain<Global> {
 
 /// Generate a [`Domain`] with an entirely unique domain family.
 ///
-/// The generated family implements [`Singleton`], which enables the use of [`AtomicPtr::safe_load`].
+/// The generated family implements [`Singleton`], which enables the use of
+/// [`crate::AtomicPtr::safe_load`].
 #[macro_export]
 macro_rules! unique_domain {
     () => {{
@@ -419,7 +420,7 @@ impl<F> Domain<F> {
     ///
     /// # Safety
     ///
-    /// 1. no [`HazardPointer`] will guard `ptr` from this point forward.
+    /// 1. No [`HazardPointer`](crate::HazardPointer) will guard `ptr` from this point forward.
     /// 2. `ptr` has not already been retired unless it has been reclaimed since then.
     /// 3. `ptr` is valid as `&T` until `self` is dropped.
     pub unsafe fn retire_ptr<T, P>(&self, ptr: *mut T) -> usize

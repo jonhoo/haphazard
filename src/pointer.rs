@@ -8,8 +8,8 @@ use alloc::boxed::Box;
 /// type is `Drop`. This trait is effectively the same as `Drop` (every trait implies `Drop`), and
 /// has a blanket implementation for any type, so can be used instead of `dyn Drop`.
 ///
-/// See also https://github.com/rust-lang/rust/issues/86653 and
-/// https://github.com/rust-lang/rust/pull/86747.
+/// See also <https://github.com/rust-lang/rust/issues/86653> and
+/// <https://github.com/rust-lang/rust/pull/86747>.
 pub trait Reclaim {}
 impl<T> Reclaim for T {}
 

@@ -249,6 +249,10 @@ where
     }
 }
 
+unsafe impl<T, F, P> Send for AtomicPtr<T, F, P> {}
+
+unsafe impl<T, F, P> Sync for AtomicPtr<T, F, P> {}
+
 impl<T, F, P> AtomicPtr<T, F, P> {
     /// Directly construct an `AtomicPtr` from a raw pointer.
     ///

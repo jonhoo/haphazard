@@ -252,6 +252,12 @@ unsafe impl<T, F, P> Send for AtomicPtr<T, F, P> {}
 // (and thus may take ownership of one) ensure that `T: Send`.
 unsafe impl<T, F, P> Sync for AtomicPtr<T, F, P> {}
 
+impl<T, F, P> std::fmt::Debug for AtomicPtr<T, F, P> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
 impl<T, F, P> From<P> for AtomicPtr<T, F, P>
 where
     P: raw::Pointer<T>,

@@ -417,6 +417,8 @@ impl<F> Domain<F> {
 
     /// Retire `ptr`, and reclaim it once it is safe to do so.
     ///
+    /// `T` must be `Send` since it may be reclaimed by a different thread.
+    ///
     /// # Safety
     ///
     /// 1. no [`HazardPointer`] will guard `ptr` from this point forward.
@@ -424,6 +426,7 @@ impl<F> Domain<F> {
     /// 3. `ptr` is valid as `&T` until `self` is dropped.
     pub unsafe fn retire_ptr<T, P>(&self, ptr: *mut T) -> usize
     where
+        T: Send,
         P: Pointer<T>,
     {
         // First, stick ptr onto the list of retired objects.

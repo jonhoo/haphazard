@@ -78,6 +78,8 @@ impl<'domain, F> HazardPointer<'domain, F> {
     ///
     /// Returns `None` if the loaded pointer is null.
     ///
+    /// `T` must be `Sync` since we do not know which thread stored the pointer in the first place.
+    ///
     /// # Safety
     ///
     /// 1. The value loaded from `AtomicPtr` is a valid `&T`, or null.
@@ -85,6 +87,7 @@ impl<'domain, F> HazardPointer<'domain, F> {
     ///    the same [`Domain`] as this holder is associated with.
     pub unsafe fn protect<'l, T>(&'l mut self, src: &'_ AtomicPtr<T>) -> Option<&'l T>
     where
+        T: Sync,
         F: 'static,
     {
         // NOTE: The type ascription here ensures that `protect_ptr` indeed returns a lifetime of
@@ -150,6 +153,8 @@ impl<'domain, F> HazardPointer<'domain, F> {
     ///
     /// If the value has changed, the new pointer is returned wrapped in `Err`.
     ///
+    /// `T` must be `Sync` since we do not know which thread stored the pointer in the first place.
+    ///
     /// Returns `Ok(None)` if `ptr.is_null()`.
     ///
     /// # Safety
@@ -163,6 +168,7 @@ impl<'domain, F> HazardPointer<'domain, F> {
         src: &'_ AtomicPtr<T>,
     ) -> Result<Option<&'l T>, *mut T>
     where
+        T: Sync,
         F: 'static,
     {
         if ptr.is_null() {
@@ -321,6 +327,7 @@ impl<'domain, F, const N: usize> HazardPointerArray<'domain, F, N> {
         mut sources: [&'_ AtomicPtr<T>; N],
     ) -> [Option<&'l T>; N]
     where
+        T: Sync,
         F: 'static,
     {
         let mut out = [None; N];

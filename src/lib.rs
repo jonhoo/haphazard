@@ -237,6 +237,21 @@ pub struct AtomicPtr<T, F = domain::Global, P = alloc::boxed::Box<T>>(
     PhantomData<(F, *mut P)>,
 );
 
+// # Safety
+//
+// It's safe to give away ownership of an AtomicPtr to a different thread, because it holds no
+// state that would be invalidated by giving ownership to another thread. Basically, this type is
+// Sync because std::sync::atomic::AtomicPtr is Sync.
+unsafe impl<T, F, P> Send for AtomicPtr<T, F, P> {}
+
+// # Safety
+//
+// It's safe to share an AtomicPtr between threads, because it internally ensures that such
+// accesses are correctly coordinated by using the atomic instructions of AtomicPtr. Furthermore,
+// all the accessors of `AtomicPtr` that yield `&T` ensure that `T: Sync`, and any that retire `T`
+// (and thus may take ownership of one) ensure that `T: Send`.
+unsafe impl<T, F, P> Sync for AtomicPtr<T, F, P> {}
+
 impl<T, F, P> From<P> for AtomicPtr<T, F, P>
 where
     P: raw::Pointer<T>,
@@ -248,10 +263,6 @@ where
         )
     }
 }
-
-unsafe impl<T, F, P> Send for AtomicPtr<T, F, P> {}
-
-unsafe impl<T, F, P> Sync for AtomicPtr<T, F, P> {}
 
 impl<T, F, P> AtomicPtr<T, F, P> {
     /// Directly construct an `AtomicPtr` from a raw pointer.
@@ -342,11 +353,16 @@ where
 {
     /// Retire the referenced object, and reclaim it once it is safe to do so.
     ///
+    /// `T` must be `Send` since it may be reclaimed by a different thread.
+    ///
     /// # Safety
     ///
     /// 1. The pointed-to object will never again be returned by any [`AtomicPtr::load`].
     /// 2. The pointed-to object has not already been retired.
-    pub unsafe fn retire(self) -> usize {
+    pub unsafe fn retire(self) -> usize
+    where
+        T: Send,
+    {
         // Safety:
         //
         // 1. Same as our caller requirement #1.
@@ -365,6 +381,8 @@ where
     /// Retire the referenced object, and reclaim it once it is safe to do so, through the given
     /// `domain`.
     ///
+    /// `T` must be `Send` since it may be reclaimed by a different thread.
+    ///
     /// # Safety
     ///
     /// 1. The pointed-to object will never again be returned by any [`AtomicPtr::load`].
@@ -375,7 +393,10 @@ where
     /// Note that requirement #3 is _partially_ enforced by the domain family (`F`), but it's on
     /// you to ensure that you don't "cross the streams" between multiple `Domain<F>`, if those can
     /// arise in your application.
-    pub unsafe fn retire_in(self, domain: &Domain<F>) -> usize {
+    pub unsafe fn retire_in(self, domain: &Domain<F>) -> usize
+    where
+        T: Send,
+    {
         // Safety:
         //
         // 1. implied by our #1 and #3: if load won't return it, there's no other way to guard it
@@ -402,7 +423,7 @@ where
     /// (single) instance of that domain.
     pub fn safe_load<'hp, 'd>(&'_ self, hp: &'hp mut HazardPointer<'d, F>) -> Option<&'hp T>
     where
-        T: 'hp,
+        T: Sync + 'hp,
         F: 'static,
     {
         // Safety: by the safety guarantees of Domain::Singleton there is exactly one domain of
@@ -428,7 +449,7 @@ impl<T, F, P> AtomicPtr<T, F, P> {
     /// in your application.
     pub unsafe fn load<'hp, 'd>(&'_ self, hp: &'hp mut HazardPointer<'d, F>) -> Option<&'hp T>
     where
-        T: 'hp,
+        T: Sync + 'hp,
         F: 'static,
     {
         unsafe { hp.protect(&self.0) }
@@ -465,11 +486,16 @@ where
 {
     /// Retire the currently-referenced object, and reclaim it once it is safe to do so.
     ///
+    /// `T` must be `Send` since it may be reclaimed by a different thread.
+    ///
     /// # Safety
     ///
     /// 1. The currently-referenced object will never again be returned by any [`AtomicPtr::load`].
     /// 2. The currently-referenced object has not already been retired.
-    pub unsafe fn retire(self) -> usize {
+    pub unsafe fn retire(self) -> usize
+    where
+        T: Send,
+    {
         // Safety:
         //
         // 1. Same as our caller requirement #1.
@@ -488,6 +514,8 @@ where
     /// Retire the currently-referenced object, and reclaim it once it is safe to do so, through
     /// the given `domain`.
     ///
+    /// `T` must be `Send` since it may be reclaimed by a different thread.
+    ///
     /// # Safety
     ///
     /// 1. The currently-referenced object will never again be returned by any [`AtomicPtr::load`].
@@ -498,7 +526,10 @@ where
     /// Note that requirement #3 is _partially_ enforced by the domain family (`F`), but it's on
     /// you to ensure that you don't "cross the streams" between multiple `Domain<F>`, if those can
     /// arise in your application.
-    pub unsafe fn retire_in(self, domain: &Domain<F>) -> usize {
+    pub unsafe fn retire_in(self, domain: &Domain<F>) -> usize
+    where
+        T: Send,
+    {
         let ptr = self.into_inner();
         unsafe { domain.retire_ptr::<T, P>(ptr) }
     }

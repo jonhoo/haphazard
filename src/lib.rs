@@ -252,9 +252,9 @@ unsafe impl<T, F, P> Send for AtomicPtr<T, F, P> {}
 // (and thus may take ownership of one) ensure that `T: Send`.
 unsafe impl<T, F, P> Sync for AtomicPtr<T, F, P> {}
 
-#[cfg(all(not(loom), feature = "std"))]
-impl<T, F, P> std::fmt::Debug for AtomicPtr<T, F, P> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+#[cfg(not(loom))]
+impl<T, F, P> core::fmt::Debug for AtomicPtr<T, F, P> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         self.0.fmt(f)
     }
 }

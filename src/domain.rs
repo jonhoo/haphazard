@@ -111,7 +111,7 @@ impl<T> WithMut<T> for core::sync::atomic::AtomicPtr<T> {
 ///
 /// This isn't bullet-proof though! Nothing prevents you from using hazard pointers allocated from
 /// one instance of `Domain<Family>` with an atomic pointer whose writers use a different
-/// _instance_ of `Domin<Family>`. So be careful!
+/// _instance_ of `Domain<Family>`. So be careful!
 ///
 /// The [`unique_domain`] macro provides a mechanism for constructing a domain with a unique
 /// domain family that cannot be confused with any other. If you can use it, you should do so, as

@@ -6,6 +6,9 @@ use alloc::collections::BTreeSet;
 use core::marker::PhantomData;
 use core::sync::atomic::Ordering;
 
+#[cfg(doc)]
+use crate::*;
+
 // Like folly's implementation, we use a time a based check to run reclamation about every
 // `SYNC_TIME_PERIOD` nanoseconds. The next time we should run reclamation is stored in
 // `due_time` inside `Domain`. On `no_std` we don't (yet) have access to time so this feature is
@@ -82,12 +85,12 @@ impl<T> WithMut<T> for core::sync::atomic::AtomicPtr<T> {
 
 /// Synchronization point between hazard pointers and the writers they guard against.
 ///
-/// Every [hazard pointer](crate::HazardPointer) is associated with a domain, and can only guard
+/// Every [hazard pointer](HazardPointer) is associated with a domain, and can only guard
 /// against reclamation of objects that are retired through that same domain. In other words, you
 /// should always ensure that your code uses the same domain to retire objects as it uses to make
 /// hazard pointers to read those objects. If it does not, the hazard pointers will provide no
 /// meaningful protection. This connection is part of the safety contract for
-/// [`HazardPointer::protect`](crate::HazardPointer::protect).
+/// [`HazardPointer::protect`].
 ///
 /// ## Domain families
 ///
@@ -105,9 +108,9 @@ impl<T> WithMut<T> for core::sync::atomic::AtomicPtr<T> {
 /// type AtomicPtr<T> = haphazard::AtomicPtr<T, Family>;
 /// ```
 ///
-/// This ensures at compile-time that you don't, for example, use a
-/// [`HazardPointer`](crate::HazardPointer) from the [global domain](Global) to guard loads from an
-/// [`AtomicPtr`](crate::AtomicPtr) that is tied to a custom domain.
+/// This ensures at compile-time that you don't, for example, use a [`HazardPointer`] from the
+/// [global domain](Global) to guard loads from an [`AtomicPtr`](crate::AtomicPtr) that is tied to
+/// a custom domain.
 ///
 /// This isn't bullet-proof though! Nothing prevents you from using hazard pointers allocated from
 /// one instance of `Domain<Family>` with an atomic pointer whose writers use a different
@@ -167,7 +170,7 @@ impl Domain<Global> {
 /// Generate a [`Domain`] with an entirely unique domain family.
 ///
 /// The generated family implements [`Singleton`], which enables the use of
-/// [`crate::AtomicPtr::safe_load`].
+/// [`AtomicPtr::safe_load`](crate::AtomicPtr::safe_load).
 #[macro_export]
 macro_rules! unique_domain {
     () => {{
@@ -420,7 +423,7 @@ impl<F> Domain<F> {
     ///
     /// # Safety
     ///
-    /// 1. No [`HazardPointer`](crate::HazardPointer) will guard `ptr` from this point forward.
+    /// 1. No [`HazardPointer`] will guard `ptr` from this point forward.
     /// 2. `ptr` has not already been retired unless it has been reclaimed since then.
     /// 3. `ptr` is valid as `&T` until `self` is dropped.
     pub unsafe fn retire_ptr<T, P>(&self, ptr: *mut T) -> usize

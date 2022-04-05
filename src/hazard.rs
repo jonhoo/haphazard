@@ -5,6 +5,9 @@ use core::mem::{ManuallyDrop, MaybeUninit};
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering;
 
+#[cfg(doc)]
+use crate::*;
+
 /// A type that can protect a referenced object from reclamation.
 ///
 /// Protects up to a single address from concurrent reclamation in the referenced [`Domain`].
@@ -18,7 +21,7 @@ use core::sync::atomic::Ordering;
 /// Note that a hazard pointer can only protect an object if any call to `retire` for said object
 /// happens in the same domain as the one the hazard pointer was created in. The generic argument
 /// `F` is a _domain family_, which helps enforce that statically. Families are discussed in the
-/// documentation for [`Domain`]. `F` defaults to the [global domain](crate::Global).
+/// documentation for [`Domain`]. `F` defaults to the [global domain](Global).
 ///
 /// If you want a (slightly) higher-level interface, use [`AtomicPtr`].
 ///
@@ -36,12 +39,12 @@ impl Default for HazardPointer<'static, crate::Global> {
 }
 
 impl HazardPointer<'static, crate::Global> {
-    /// Create a new hazard pointer in the [global domain](crate::Global).
+    /// Create a new hazard pointer in the [global domain](Global).
     pub fn new() -> Self {
         HazardPointer::new_in_domain(Domain::global())
     }
 
-    /// Create a new hazard pointer array in the [global domain](crate::Global).
+    /// Create a new hazard pointer array in the [global domain](Global).
     pub fn many<const N: usize>() -> HazardPointerArray<'static, crate::Global, N> {
         HazardPointer::many_in_domain(Domain::global())
     }

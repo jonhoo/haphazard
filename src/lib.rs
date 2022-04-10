@@ -184,13 +184,19 @@ pub use hazard::{HazardPointer, HazardPointerArray};
 
 /// A managed pointer type which can be safely shared between threads.
 ///
-/// Unlike [`std::sync::AtomicPtr`](core::sync::AtomicPtr), `haphazard::AtomicPtr` can safely load
-/// `&T` directly, and ensure that the referenced `T` is not deallocated until the `&T` is dropped,
-/// even in the presence of concurrent writers. Also unlike
-/// [`std::sync::AtomicPtr`](core::sync::AtomicPtr), **all loads and stores on this type use
-/// `Acquire` and `Release` semantics**.
+/// This type has the same in-memory representation as a [`std::sync::atomic::AtomicPtr`], but
+/// provides additional functionality and stricter guarantees:
 ///
-/// To construct one, use `AtomicPtr::from`:
+/// - `haphazard::AtomicPtr` can safely load `&T` directly, and ensure that the referenced `T` is
+///   not deallocated until the `&T` is dropped, even in the presence of concurrent writers.
+/// - All loads and stores on this type use `Acquire` and `Release` semantics.
+///
+/// **Note:** This type is only available on platforms that support atomic loads and stores of
+/// pointers. Its size depends on the target pointer’s size.
+///
+/// # Basic usage
+///
+/// To construct one, use [`AtomicPtr::from`]:
 ///
 /// ```rust
 /// # use haphazard::AtomicPtr;
@@ -208,15 +214,9 @@ pub use hazard::{HazardPointer, HazardPointerArray};
 /// used to ensure that when writers drop a value, it is dropped using the appropriate `Drop`
 /// implementation.
 ///
-/// This type has the same in-memory representation as a
-/// [`std::sync::AtomicPtr`](core::sync::AtomicPtr).
-///
 /// **Warning:** When this type is dropped, it does _not_ automatically retire the object it is
 /// currently pointing to. In order to retire (and eventually reclaim) that object, use
-/// [`AtomicPtr::retire_in`].
-///
-/// **Note:** This type is only available on platforms that support atomic loads and stores of
-/// pointers. Its size depends on the target pointer’s size.
+/// [`AtomicPtr::retire`] or [`AtomicPtr::retire_in`].
 ///
 // The unsafe constract enforced throughout this crate is that a given `AtomicPtr<T, F, P>` only
 // ever holds the address of a valid `T` allocated through `P` from a domain with family `F`, or
@@ -424,18 +424,17 @@ where
     /// to it.
     ///
     /// This method is only available for domains with _singleton families_, because
-    /// implementations of the unsafe [`Domain::Singleton`] trait guarantee that there
-    /// is only ever one instance of a Domain with the family in question, which in turn
-    /// implies that loads and stores using such a family **must** be using the same
-    /// (single) instance of that domain.
+    /// implementations of the unsafe [`Singleton`] trait guarantee that there is only ever one
+    /// instance of a [`Domain`] with the family in question, which in turn implies that loads and
+    /// stores using such a family **must** be using the same (single) instance of that domain.
     pub fn safe_load<'hp, 'd>(&'_ self, hp: &'hp mut HazardPointer<'d, F>) -> Option<&'hp T>
     where
         T: Sync + 'hp,
         F: 'static,
     {
-        // Safety: by the safety guarantees of Domain::Singleton there is exactly one domain of
-        // this family, so we know that all calls to `load` that have returned this object must
-        // have been using the same domain as we're retiring to.
+        // Safety: by the safety guarantees of Singleton there is exactly one domain of this
+        // family, so we know that all calls to `load` that have returned this object must have
+        // been using the same domain as we're retiring to.
         unsafe { self.load(hp) }
     }
 }
@@ -632,7 +631,7 @@ impl<T, F, P> AtomicPtr<T, F, P> {
     ///
     /// # Safety
     ///
-    /// `ptr must conform to the same safety requirements as the argument to [`AtomicPtr::new`].
+    /// `ptr` must conform to the same safety requirements as the argument to [`AtomicPtr::new`].
     pub unsafe fn store_ptr(&self, ptr: *mut T) {
         self.0.store(ptr, Ordering::Release)
     }
@@ -641,7 +640,7 @@ impl<T, F, P> AtomicPtr<T, F, P> {
     ///
     /// # Safety
     ///
-    /// `ptr must conform to the same safety requirements as the argument to [`AtomicPtr::new`].
+    /// `ptr` must conform to the same safety requirements as the argument to [`AtomicPtr::new`].
     pub unsafe fn swap_ptr(&self, ptr: *mut T) -> Option<Replaced<T, F, P>> {
         let ptr = self.0.swap(ptr, Ordering::Release);
         NonNull::new(ptr).map(|ptr| Replaced {
@@ -658,7 +657,7 @@ impl<T, F, P> AtomicPtr<T, F, P> {
     ///
     /// # Safety
     ///
-    /// `ptr must conform to the same safety requirements as the argument to [`AtomicPtr::new`].
+    /// `ptr` must conform to the same safety requirements as the argument to [`AtomicPtr::new`].
     pub unsafe fn compare_exchange_ptr(
         &self,
         current: *mut T,
@@ -683,7 +682,7 @@ impl<T, F, P> AtomicPtr<T, F, P> {
     ///
     /// # Safety
     ///
-    /// `ptr must conform to the same safety requirements as the argument to [`AtomicPtr::new`].
+    /// `ptr` must conform to the same safety requirements as the argument to [`AtomicPtr::new`].
     pub unsafe fn compare_exchange_weak_ptr(
         &self,
         current: *mut T,

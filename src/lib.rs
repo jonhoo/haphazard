@@ -311,6 +311,7 @@ impl<T, F, P> AtomicPtr<T, F, P> {
 ///
 /// This type has the same in-memory representation as a [`std::ptr::NonNull`](core::ptr::NonNull).
 #[repr(transparent)]
+#[derive(Debug)]
 pub struct Replaced<T, F, P> {
     ptr: NonNull<T>,
     _family: PhantomData<F>,
@@ -570,6 +571,10 @@ where
     ///
     /// The return value is a result indicating whether the new value was written and containing
     /// the previous value. On success this value is guaranteed to be equal to `current`.
+    ///
+    /// The return value is a result indicating whether the new value was written successfully.
+    /// - On success the result contains the pointer previously in `self`, or None if it was null
+    /// - On failure the result gives back `new`
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
     pub fn compare_exchange(
         &self,
@@ -584,9 +589,9 @@ where
         // through the `unsafe` retire methods on `AtomicPtr` and `Replaced`, all of which call
         // `Domain::retire_ptr`, or by dereferencing a raw pointer which is unsafe anyway.
         let r = unsafe { self.compare_exchange_ptr(current, new) };
-        r.map_err(|ptr| {
+        r.map_err(move |_| {
             // Safety: `ptr` is `new`, which was never shared, and was a valid `P`.
-            unsafe { P::from_raw(ptr) }
+            unsafe { P::from_raw(new) }
         })
     }
 
@@ -594,8 +599,10 @@ where
     ///
     /// Unlike [`AtomicPtr::compare_exchange`], this function is allowed to spuriously fail even
     /// when the comparison succeeds, which can result in more efficient code on some platforms.
-    /// The return value is a result indicating whether the new value was written and containing
-    /// the previous value. On success this value is guaranteed to be equal to `current`.
+    ///
+    /// The return value is a result indicating whether the new value was written successfully.
+    /// - On success the result contains the pointer previously in `self`, or None if it was null
+    /// - On failure the result gives back `new`
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
     pub fn compare_exchange_weak(
         &self,
@@ -610,9 +617,9 @@ where
         // through the `unsafe` retire methods on `AtomicPtr` and `Replaced`, all of which call
         // `Domain::retire_ptr`, or by dereferencing a raw pointer which is unsafe anyway.
         let r = unsafe { self.compare_exchange_weak_ptr(current, new) };
-        r.map_err(|ptr| {
+        r.map_err(move |_| {
             // Safety: `ptr` is `new`, which was never shared, and was a valid `P`.
-            unsafe { P::from_raw(ptr) }
+            unsafe { P::from_raw(new) }
         })
     }
 }
@@ -652,7 +659,13 @@ impl<T, F, P> AtomicPtr<T, F, P> {
     /// Stores `new` if the current pointer is `current`.
     ///
     /// The return value is a result indicating whether the new pointer was written and containing
-    /// the previous pointer. On success this value is guaranteed to be equal to `current`.
+    /// the previous pointer.
+    ///
+    /// # Returns
+    ///
+    /// - On success `current` is returned and `new` is guarnteed to have been stored into `self`.
+    /// - On failure the value that caused the swap to failed is returned (that value inside `self` which is
+    ///   different from `current`).
     ///
     /// # Safety
     ///
@@ -677,7 +690,13 @@ impl<T, F, P> AtomicPtr<T, F, P> {
     /// Unlike [`AtomicPtr::compare_exchange`], this function is allowed to spuriously fail even
     /// when the comparison succeeds, which can result in more efficient code on some platforms.
     /// The return value is a result indicating whether the new pointer was written and containing
-    /// the previous pointer. On success this value is guaranteed to be equal to `current`.
+    /// the previous pointer.
+    ///
+    /// # Returns
+    ///
+    /// - On success `current` is returned and `new` is guarnteed to have been stored into `self`.
+    /// - On failure the value that caused the swap to failed is returned (that value inside `self` which is
+    ///   different from `current`).
     ///
     /// # Safety
     ///

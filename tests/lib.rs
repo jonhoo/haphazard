@@ -209,3 +209,27 @@ fn drop_domain() {
     drop(domain);
     assert_eq!(drops_9001.load(Ordering::SeqCst), 1);
 }
+
+#[non_exhaustive]
+#[derive(Debug)]
+struct Family;
+
+#[test]
+fn hazardptr_compare_exchange_fail() {
+    use haphazard::AtomicPtr as HpAtomicPtr;
+    // SAFETY: p is null
+    let ptr: HpAtomicPtr<u32, Family> = unsafe { HpAtomicPtr::new(std::ptr::null_mut()) };
+
+    let not_current = Box::into_raw(Box::new(0u32));
+
+    let new = Box::new(0u32);
+    let new_ptr = new.as_ref() as *const _;
+
+    // This will fail and re-construct `new` as a box
+    let result = ptr.compare_exchange_weak(not_current, new).unwrap_err();
+
+    // Ensure we got `new` back
+    assert_eq!(new_ptr, result.as_ref() as *const _);
+
+    let _ = unsafe { Box::from_raw(not_current) };
+}

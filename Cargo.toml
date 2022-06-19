@@ -24,6 +24,9 @@ loom = "0.5.5"
 [dev-dependencies]
 criterion = "0.3"
 
+[lib]
+bench = false
+
 [[bench]]
 name = "folly"
 harness = false

@@ -47,8 +47,8 @@ folly_bench!(concurrent_new_holder, {
     black_box(HazardPointer::new());
 });
 folly_bench!(concurrent_retire, {
-    let foo: AtomicPtr<i32> = AtomicPtr::from(Box::new(0));
-    unsafe { foo.retire() };
+    let foo: AtomicPtr<i32> = black_box(AtomicPtr::from(Box::new(0)));
+    black_box(unsafe { foo.retire() });
 });
 
 criterion_group!(benches, concurrent_new_holder, concurrent_retire);

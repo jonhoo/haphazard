@@ -44,11 +44,11 @@ macro_rules! folly_bench {
 }
 
 folly_bench!(concurrent_new_holder, {
-    black_box(HazardPointer::make_global());
+    black_box(HazardPointer::new());
 });
 folly_bench!(concurrent_retire, {
-    let foo = Box::into_raw(Box::new(HazPtrObjectWrapper::with_global_domain(0)));
-    black_box(unsafe { HazPtrObjectWrapper::retire(foo, &deleters::drop_box) });
+    let foo: AtomicPtr<i32> = black_box(AtomicPtr::from(Box::new(0)));
+    black_box(unsafe { foo.retire() });
 });
 
 criterion_group!(benches, concurrent_new_holder, concurrent_retire);

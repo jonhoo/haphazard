@@ -547,7 +547,7 @@ where
         let ptr = p.into_raw();
         // Safety (from AtomicPtr::new):
         //
-        // #1 & #2 are both satisfied by virute of `p` being of type `P`, which holds a valid `T`.
+        // #1 & #2 are both satisfied by virtue of `p` being of type `P`, which holds a valid `T`.
         // #3 is satisfied because the `P` is moved into `store`, and so can only be dropped
         // through the `unsafe` retire methods on `AtomicPtr`, all of which call
         // `Domain::retire_ptr`, or by dereferencing a raw pointer which is unsafe anyway.
@@ -559,7 +559,7 @@ where
         let ptr = p.into_raw();
         // Safety (from AtomicPtr::new):
         //
-        // #1 & #2 are both satisfied by virute of `p` being of type `P`, which holds a valid `T`.
+        // #1 & #2 are both satisfied by virtue of `p` being of type `P`, which holds a valid `T`.
         // #3 is satisfied because the `P` is moved into `store`, and so can only be dropped
         // through the `unsafe` retire methods on `AtomicPtr` and `Replaced`, all of which call
         // `Domain::retire_ptr`, or by dereferencing a raw pointer which is unsafe anyway.
@@ -579,7 +579,7 @@ where
         let new = new.into_raw();
         // Safety (from AtomicPtr::new):
         //
-        // #1 & #2 are both satisfied by virute of `p` being of type `P`, which holds a valid `T`.
+        // #1 & #2 are both satisfied by virtue of `p` being of type `P`, which holds a valid `T`.
         // #3 is satisfied because the `P` is moved into `store`, and so can only be dropped
         // through the `unsafe` retire methods on `AtomicPtr` and `Replaced`, all of which call
         // `Domain::retire_ptr`, or by dereferencing a raw pointer which is unsafe anyway.
@@ -605,7 +605,7 @@ where
         let new = new.into_raw();
         // Safety (from AtomicPtr::new):
         //
-        // #1 & #2 are both satisfied by virute of `p` being of type `P`, which holds a valid `T`.
+        // #1 & #2 are both satisfied by virtue of `p` being of type `P`, which holds a valid `T`.
         // #3 is satisfied because the `P` is moved into `store`, and so can only be dropped
         // through the `unsafe` retire methods on `AtomicPtr` and `Replaced`, all of which call
         // `Domain::retire_ptr`, or by dereferencing a raw pointer which is unsafe anyway.

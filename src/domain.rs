@@ -447,6 +447,33 @@ impl<F> Domain<F> {
         self.push_list(retired)
     }
 
+    /// Retire `ptr`, and reclaim it once it is safe to do so.
+    /// The underlying value of `ptr` will be deallocated using `deleter`.
+    ///
+    /// `T` must be `Send` since it may be reclaimed by a different thread.
+    ///
+    /// # Safety
+    ///
+    /// 1. No [`HazardPointer`] will guard `ptr` from this point forward.
+    /// 2. `ptr` has not already been retired unless it has been reclaimed since then.
+    /// 3. `ptr` is valid as `&T` until `self` is dropped.
+    /// 4. `deleter` must deallocated T, otherwise memory will be leaked.
+    pub unsafe fn retire_ptr_with<T>(
+        &self,
+        ptr: *mut T,
+        deleter: unsafe fn(ptr: *mut dyn Reclaim),
+    ) -> usize
+    where
+        T: Send,
+    {
+        // First, stick ptr onto the list of retired objects.
+        //
+        // Safety: ptr will not be accessed after Domain is dropped, which is when 'domain ends.
+        let retired = Box::new(unsafe { Retired::new(self, ptr, deleter) });
+
+        self.push_list(retired)
+    }
+
     /// Reclaim as many retired objects as possible.
     ///
     /// Returns the number of retired objects that were reclaimed.

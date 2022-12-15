@@ -433,18 +433,13 @@ impl<F> Domain<F> {
         T: Send,
         P: Pointer<T>,
     {
-        // First, stick ptr onto the list of retired objects.
-        //
-        // Safety: ptr will not be accessed after Domain is dropped, which is when 'domain ends.
-        let retired = Box::new(unsafe {
-            Retired::new(self, ptr, |ptr: *mut dyn Reclaim| {
+        unsafe {
+            self.retire_ptr_with(ptr, |ptr: *mut dyn Reclaim| {
                 // Safety: the safety requirements of `from_raw` are the same as the ones to call
                 // the deleter.
                 let _ = P::from_raw(ptr as *mut T);
             })
-        });
-
-        self.push_list(retired)
+        }
     }
 
     /// Retire `ptr`, and reclaim it once it is safe to do so.

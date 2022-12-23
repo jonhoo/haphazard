@@ -311,7 +311,6 @@ impl<T, F, P> AtomicPtr<T, F, P> {
 ///
 /// This type has the same in-memory representation as a [`std::ptr::NonNull`](core::ptr::NonNull).
 #[repr(transparent)]
-#[derive(Debug)]
 pub struct Replaced<T, F, P> {
     ptr: NonNull<T>,
     _family: PhantomData<F>,
@@ -351,6 +350,12 @@ impl<T, F, P> Replaced<T, F, P> {
     /// Extract the pointer originally stored in the [`AtomicPtr`].
     pub fn into_inner(self) -> NonNull<T> {
         self.ptr
+    }
+}
+
+impl<T, F, P> core::fmt::Debug for Replaced<T, F, P> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        self.ptr.fmt(f)
     }
 }
 
@@ -589,8 +594,14 @@ where
         // through the `unsafe` retire methods on `AtomicPtr` and `Replaced`, all of which call
         // `Domain::retire_ptr`, or by dereferencing a raw pointer which is unsafe anyway.
         let r = unsafe { self.compare_exchange_ptr(current, new) };
-        r.map_err(move |_| {
-            // Safety: `ptr` is `new`, which was never shared, and was a valid `P`.
+        r.map_err(move |_ptr| {
+            // TODO: Return `_ptr` to the caller somehow.
+            // Adding this to the API is a breaking change, so we plan add this later at a more
+            // convient time.
+            // See: https://github.com/jonhoo/haphazard/pull/38#discussion_r901172203
+
+            // Safety:
+            // The swap failed, so still have exclusive access to `new` since it was never shared
             unsafe { P::from_raw(new) }
         })
     }
@@ -618,7 +629,8 @@ where
         // `Domain::retire_ptr`, or by dereferencing a raw pointer which is unsafe anyway.
         let r = unsafe { self.compare_exchange_weak_ptr(current, new) };
         r.map_err(move |_| {
-            // Safety: `ptr` is `new`, which was never shared, and was a valid `P`.
+            // Safety:
+            // The swap failed, so still have exclusive access to `new` since it was never shared
             unsafe { P::from_raw(new) }
         })
     }
@@ -658,14 +670,8 @@ impl<T, F, P> AtomicPtr<T, F, P> {
 
     /// Stores `new` if the current pointer is `current`.
     ///
-    /// The return value is a result indicating whether the new pointer was written and containing
-    /// the previous pointer.
-    ///
-    /// # Returns
-    ///
-    /// - On success `current` is returned and `new` is guarnteed to have been stored into `self`.
-    /// - On failure the value that caused the swap to failed is returned (that value inside `self` which is
-    ///   different from `current`).
+    /// The return value is a result indicating whether the new value was written and containing
+    /// the previous value. On success this value is guaranteed to be equal to `current`.
     ///
     /// # Safety
     ///
@@ -687,16 +693,11 @@ impl<T, F, P> AtomicPtr<T, F, P> {
 
     /// Stores `new` if the current pointer is `current`.
     ///
-    /// Unlike [`AtomicPtr::compare_exchange`], this function is allowed to spuriously fail even
+    /// Unlike [`AtomicPtr::compare_exchange_ptr`], this function is allowed to spuriously fail even
     /// when the comparison succeeds, which can result in more efficient code on some platforms.
+    ///
     /// The return value is a result indicating whether the new pointer was written and containing
     /// the previous pointer.
-    ///
-    /// # Returns
-    ///
-    /// - On success `current` is returned and `new` is guarnteed to have been stored into `self`.
-    /// - On failure the value that caused the swap to failed is returned (that value inside `self` which is
-    ///   different from `current`).
     ///
     /// # Safety
     ///

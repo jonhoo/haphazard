@@ -576,10 +576,6 @@ where
     ///
     /// The return value is a result indicating whether the new value was written and containing
     /// the previous value. On success this value is guaranteed to be equal to `current`.
-    ///
-    /// The return value is a result indicating whether the new value was written successfully.
-    /// - On success the result contains the pointer previously in `self`, or None if it was null
-    /// - On failure the result gives back `new`
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
     pub fn compare_exchange(
         &self,
@@ -611,9 +607,8 @@ where
     /// Unlike [`AtomicPtr::compare_exchange`], this function is allowed to spuriously fail even
     /// when the comparison succeeds, which can result in more efficient code on some platforms.
     ///
-    /// The return value is a result indicating whether the new value was written successfully.
-    /// - On success the result contains the pointer previously in `self`, or None if it was null
-    /// - On failure the result gives back `new`
+    /// The return value is a result indicating whether the new value was written and containing
+    /// the previous value. On success this value is guaranteed to be equal to `current`.
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
     pub fn compare_exchange_weak(
         &self,

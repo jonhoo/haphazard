@@ -606,7 +606,6 @@ where
     ///
     /// Unlike [`AtomicPtr::compare_exchange`], this function is allowed to spuriously fail even
     /// when the comparison succeeds, which can result in more efficient code on some platforms.
-    ///
     /// The return value is a result indicating whether the new value was written and containing
     /// the previous value. On success this value is guaranteed to be equal to `current`.
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
@@ -665,8 +664,8 @@ impl<T, F, P> AtomicPtr<T, F, P> {
 
     /// Stores `new` if the current pointer is `current`.
     ///
-    /// The return value is a result indicating whether the new value was written and containing
-    /// the previous value. On success this value is guaranteed to be equal to `current`.
+    /// The return value is a result indicating whether the new pointer was written and containing
+    /// the previous pointer. On success this value is guaranteed to be equal to `current`.
     ///
     /// # Safety
     ///
@@ -692,7 +691,7 @@ impl<T, F, P> AtomicPtr<T, F, P> {
     /// when the comparison succeeds, which can result in more efficient code on some platforms.
     ///
     /// The return value is a result indicating whether the new pointer was written and containing
-    /// the previous pointer.
+    /// the previous pointer. On success this value is guaranteed to be equal to `current`.
     ///
     /// # Safety
     ///

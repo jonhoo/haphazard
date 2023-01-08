@@ -57,7 +57,7 @@ fn acquires_multiple() {
 
     drop(hazptr_array);
     // invalid:
-    // let _: i32 = my_y.0;
+    // let _: i32 = my_x.0;
     // invalid:
     // let _: i32 = my_y.0;
 

@@ -217,7 +217,8 @@ struct Family;
 #[test]
 fn hazardptr_compare_exchange_fail() {
     // SAFETY: p is null
-    let ptr: haphazard::AtomicPtr<u32, Family> = unsafe { haphazard::AtomicPtr::new(std::ptr::null_mut()) };
+    let ptr: haphazard::AtomicPtr<u32, Family> =
+        unsafe { haphazard::AtomicPtr::new(std::ptr::null_mut()) };
 
     let not_current = Box::into_raw(Box::new(0u32));
 

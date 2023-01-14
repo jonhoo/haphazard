@@ -353,6 +353,12 @@ impl<T, F, P> Replaced<T, F, P> {
     }
 }
 
+impl<T, F, P> core::fmt::Debug for Replaced<T, F, P> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        self.ptr.fmt(f)
+    }
+}
+
 impl<T, P> Replaced<T, raw::families::Global, P>
 where
     P: raw::Pointer<T>,
@@ -584,9 +590,15 @@ where
         // through the `unsafe` retire methods on `AtomicPtr` and `Replaced`, all of which call
         // `Domain::retire_ptr`, or by dereferencing a raw pointer which is unsafe anyway.
         let r = unsafe { self.compare_exchange_ptr(current, new) };
-        r.map_err(|ptr| {
-            // Safety: `ptr` is `new`, which was never shared, and was a valid `P`.
-            unsafe { P::from_raw(ptr) }
+        r.map_err(move |_ptr| {
+            // TODO: Return `_ptr` to the caller somehow.
+            // Adding this to the API is a breaking change, so we plan add this later at a more
+            // convient time.
+            // See: https://github.com/jonhoo/haphazard/pull/38#discussion_r901172203
+
+            // Safety:
+            // The swap failed, so still have exclusive access to `new` since it was never shared
+            unsafe { P::from_raw(new) }
         })
     }
 
@@ -610,9 +622,10 @@ where
         // through the `unsafe` retire methods on `AtomicPtr` and `Replaced`, all of which call
         // `Domain::retire_ptr`, or by dereferencing a raw pointer which is unsafe anyway.
         let r = unsafe { self.compare_exchange_weak_ptr(current, new) };
-        r.map_err(|ptr| {
-            // Safety: `ptr` is `new`, which was never shared, and was a valid `P`.
-            unsafe { P::from_raw(ptr) }
+        r.map_err(move |_| {
+            // Safety:
+            // The swap failed, so still have exclusive access to `new` since it was never shared
+            unsafe { P::from_raw(new) }
         })
     }
 }
@@ -674,8 +687,9 @@ impl<T, F, P> AtomicPtr<T, F, P> {
 
     /// Stores `new` if the current pointer is `current`.
     ///
-    /// Unlike [`AtomicPtr::compare_exchange`], this function is allowed to spuriously fail even
+    /// Unlike [`AtomicPtr::compare_exchange_ptr`], this function is allowed to spuriously fail even
     /// when the comparison succeeds, which can result in more efficient code on some platforms.
+    ///
     /// The return value is a result indicating whether the new pointer was written and containing
     /// the previous pointer. On success this value is guaranteed to be equal to `current`.
     ///

@@ -220,18 +220,17 @@ macro_rules! unique_domain {
 /// ```
 #[macro_export]
 macro_rules! static_unique_domain {
-    (static $domain:ident: Domain<$family:ident>) => {
-        use $crate::{Domain, Singleton};
+    ($v:vis static $domain:ident: Domain<$family:ident>) => {
         struct UniqueFamily;
         // Safety: nowhere else can construct an instance of UniqueFamily to pass to Domain::new.
-        unsafe impl Singleton for UniqueFamily {}
-        struct $family {
+        unsafe impl $crate::Singleton for UniqueFamily {}
+        $v struct $family {
             _inner: UniqueFamily,
         }
         // Safety: $family can only be constructed by first constructing an instance of
         // UniqueFamily, which is itself a Singlton.
-        unsafe impl Singleton for $family {}
-        static $domain: Domain<$family> = Domain::new(&$family {
+        unsafe impl $crate::Singleton for $family {}
+        $v static $domain: $crate::Domain<$family> = $crate::Domain::new(&$family {
             _inner: UniqueFamily,
         });
     };

@@ -319,11 +319,7 @@ pub struct Replaced<T, F, P> {
 
 impl<T, F, P> Clone for Replaced<T, F, P> {
     fn clone(&self) -> Self {
-        Self {
-            ptr: self.ptr,
-            _family: self._family,
-            _holder: self._holder,
-        }
+        *self
     }
 }
 impl<T, F, P> Copy for Replaced<T, F, P> {}

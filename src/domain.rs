@@ -933,8 +933,8 @@ mod tests {
         assert_eq!(rec1.next.load(Ordering::Relaxed), core::ptr::null_mut());
         domain.release(rec1);
         domain.release(rec3);
-        drop(rec1);
-        drop(rec3);
+        let _ = rec1;
+        let _ = rec3;
 
         let [one, two, three] = domain.acquire_many();
 
@@ -973,7 +973,7 @@ mod tests {
             rec1 as *const _ as *mut _
         );
         domain.release(rec2);
-        drop(rec2);
+        let _ = rec2;
 
         // one was previously rec2
         // two is a new node
@@ -1016,9 +1016,9 @@ mod tests {
         domain.release(rec2);
         // rec3 available_next -> rec2
         domain.release(rec3);
-        drop(rec1);
-        drop(rec2);
-        drop(rec3);
+        let _ = rec1;
+        let _ = rec2;
+        let _ = rec3;
 
         // one is rec3
         // two is rec2

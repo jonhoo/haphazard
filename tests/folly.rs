@@ -17,7 +17,7 @@ extern "Rust" {
 
 impl Count {
     pub fn test_local() -> &'static Count {
-        let ptr = Box::leak(Box::new(Self::default()));
+        let ptr = Box::leak(Box::default());
         #[cfg(miri)]
         unsafe {
             miri_static_root(ptr as *const _ as *const u8);
@@ -149,6 +149,7 @@ fn move_test() {
         hptr0.protect_raw(x);
         unsafe { domain.retire_ptr::<_, Box<_>>(x) };
         let hptr1 = hptr0;
+        #[allow(clippy::redundant_locals)]
         let hptr1 = hptr1;
         let mut hptr2;
         hptr2 = hptr1;

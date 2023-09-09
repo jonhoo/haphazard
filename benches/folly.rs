@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_names)]
+
 use haphazard::*;
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};

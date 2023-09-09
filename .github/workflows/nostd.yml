@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
   pull_request:
+# Spend CI time only on latest ref: https://github.com/jonhoo/rust-ci-conf/pull/5
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
 name: no-std
 jobs:
   nostd:
@@ -13,7 +17,7 @@ jobs:
       matrix:
         target: [thumbv7m-none-eabi, aarch64-unknown-none]
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           submodules: true
       - name: Install stable

@@ -190,7 +190,7 @@ macro_rules! unique_domain {
 
 /// Generate a static [`Domain`] with an entirely unique domain family.
 ///
-/// Usage: `unique_domain_family!(static DOMAIN: Domain<Family>);`
+/// Usage: `static_unique_domain!(static DOMAIN: Domain<Family>);`
 ///
 /// This macro is useful when you want to store a domain in a static variable, and makes it
 /// possible to name the Domain. The generated family implements [`Singleton`], which enables
@@ -218,6 +218,15 @@ macro_rules! unique_domain {
 /// }
 /// # fn main() {}
 /// ```
+///
+/// # Notes
+///
+/// This macro cannot be used in a function scope or impl block. This macro (at least currently)
+/// requires the ability to define a module, and therefore must be placed in module scope. This
+/// may be relaxed in the future, but hopefully shouldn't be exteneded.
+///
+/// This also restricts the ability to define a struct or module with the same name as the static
+/// variable, or the family.
 #[macro_export]
 macro_rules! static_unique_domain {
     ($v:vis static $domain:ident: Domain<$family:ident>) => {
@@ -227,6 +236,8 @@ macro_rules! static_unique_domain {
             // Safety: nowhere else can construct an instance of UniqueFamily to pass to Domain::new.
             unsafe impl $crate::Singleton for UniqueFamily {}
             pub struct $family {
+                // Technically, since we are in an inner module, this private member may actually
+                // be enough, it might not need to be a private type.
                 _inner: UniqueFamily,
             }
             // Safety: $family can only be constructed by first constructing an instance of
@@ -241,7 +252,9 @@ macro_rules! static_unique_domain {
     };
 }
 
-/// This item is defined purely to run compile_fail doc tests. It is marked as doc(hidden)
+/// This item is defined purely to run compile_fail doc tests. It is marked as `doc(hidden)`, to
+/// avoid polluting the documentation.
+///
 /// ```rust,compile_fail
 /// # struct DataStructure;
 /// # use haphazard::{HazardPointer, AtomicPtr, static_unique_domain};

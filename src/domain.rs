@@ -221,20 +221,46 @@ macro_rules! unique_domain {
 #[macro_export]
 macro_rules! static_unique_domain {
     ($v:vis static $domain:ident: Domain<$family:ident>) => {
-        struct UniqueFamily;
-        // Safety: nowhere else can construct an instance of UniqueFamily to pass to Domain::new.
-        unsafe impl $crate::Singleton for UniqueFamily {}
-        $v struct $family {
-            _inner: UniqueFamily,
+        #[allow(non_snake_case)]
+        mod $domain {
+            struct UniqueFamily;
+            // Safety: nowhere else can construct an instance of UniqueFamily to pass to Domain::new.
+            unsafe impl $crate::Singleton for UniqueFamily {}
+            pub struct $family {
+                _inner: UniqueFamily,
+            }
+            // Safety: $family can only be constructed by first constructing an instance of
+            // UniqueFamily, which is itself a Singlton.
+            unsafe impl $crate::Singleton for $family {}
+            pub static $domain: $crate::Domain<$family> = $crate::Domain::new(&$family {
+                _inner: UniqueFamily,
+            });
         }
-        // Safety: $family can only be constructed by first constructing an instance of
-        // UniqueFamily, which is itself a Singlton.
-        unsafe impl $crate::Singleton for $family {}
-        $v static $domain: $crate::Domain<$family> = $crate::Domain::new(&$family {
-            _inner: UniqueFamily,
-        });
+        $v use $domain::$family;
+        $v use $domain::$domain;
     };
 }
+
+/// This item is defined purely to run compile_fail doc tests. It is marked as doc(hidden)
+/// ```rust,compile_fail
+/// # struct DataStructure;
+/// # use haphazard::{HazardPointer, AtomicPtr, static_unique_domain};
+/// static_unique_domain!(static LOCAL: Domain<Local>);
+/// static BROKEN: Domain<Local> = Domain::new(&Local {
+///     _inner: LOCAL::UniqueFamily,
+/// });
+/// # fn main() {}
+/// ```
+///
+/// ```rust
+/// # struct DataStructure;
+/// # use haphazard::{HazardPointer, AtomicPtr, static_unique_domain};
+/// static_unique_domain!(static LOCAL: Domain<Local>);
+/// static_unique_domain!(static LOCAL2: Domain<Local2>);
+/// # fn main() {}
+/// ```
+#[doc(hidden)]
+fn compile_fail_tests() {}
 
 // Macro to make new const only when not in loom.
 macro_rules! new {

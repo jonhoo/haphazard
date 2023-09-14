@@ -174,10 +174,13 @@ impl Domain<Global> {
 #[macro_export]
 macro_rules! unique_domain {
     () => {{
-        struct UniqueFamily;
-        // Safety: nowhere else can construct an instance of UniqueFamily to pass to Domain::new.
-        unsafe impl Singleton for UniqueFamily {}
-        Domain::new(&UniqueFamily)
+        fn create_domain() -> Domain<impl Singleton> {
+            struct UniqueFamily;
+            // Safety: nowhere else can construct an instance of UniqueFamily to pass to Domain::new.
+            unsafe impl Singleton for UniqueFamily {}
+            Domain::new(&UniqueFamily)
+        }
+        create_domain()
     }};
 }
 

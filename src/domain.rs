@@ -913,6 +913,15 @@ struct CannotConfuseGlobalReader;
 #[cfg(doctest)]
 struct CannotConfuseAcrossFamilies;
 
+/// Ensures the inner type (`UniqueFamily`) defined by unique_domain!() is not namable.
+/// ```compile_fail
+/// use haphazard::*;
+/// let dw = unique_domain!();
+/// let bad_dw = Domain::new(&UniqueFamily);
+/// ```
+#[cfg(doctest)]
+struct CannotNameInnerType;
+
 #[cfg(test)]
 mod tests {
     use super::Domain;

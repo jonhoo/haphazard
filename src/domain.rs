@@ -232,19 +232,14 @@ macro_rules! static_unique_domain {
     ($v:vis static $domain:ident: Domain<$family:ident>) => {
         #[allow(non_snake_case)]
         mod $domain {
-            struct UniqueFamily;
-            // Safety: nowhere else can construct an instance of UniqueFamily to pass to Domain::new.
-            unsafe impl $crate::Singleton for UniqueFamily {}
             pub struct $family {
-                // Technically, since we are in an inner module, this private member may actually
-                // be enough, it might not need to be a private type.
-                _inner: UniqueFamily,
+                _inner: (),
             }
-            // Safety: $family can only be constructed by first constructing an instance of
-            // UniqueFamily, which is itself a Singlton.
+            // Safety: $family can only be constructed by this module, since it contains private
+            // members.
             unsafe impl $crate::Singleton for $family {}
             pub static $domain: $crate::Domain<$family> = $crate::Domain::new(&$family {
-                _inner: UniqueFamily,
+                _inner: (),
             });
         }
         $v use $domain::$family;
@@ -252,9 +247,6 @@ macro_rules! static_unique_domain {
     };
 }
 
-/// This item is defined purely to run compile_fail doc tests. It is marked as `doc(hidden)`, to
-/// avoid polluting the documentation.
-///
 /// ```rust,compile_fail
 /// # struct DataStructure;
 /// # use haphazard::{HazardPointer, AtomicPtr, static_unique_domain};
@@ -264,16 +256,41 @@ macro_rules! static_unique_domain {
 /// });
 /// # fn main() {}
 /// ```
-///
+#[doc(hidden)]
+pub fn static_unique_domain_inner_type_is_unnamable() {}
+
 /// ```rust
 /// # struct DataStructure;
 /// # use haphazard::{HazardPointer, AtomicPtr, static_unique_domain};
 /// static_unique_domain!(static LOCAL: Domain<Local>);
 /// static_unique_domain!(static LOCAL2: Domain<Local2>);
-/// # fn main() {}
+/// fn main() {
+///     let x: AtomicPtr<_, Local> = AtomicPtr::from(Box::new(42));
+///     let y: AtomicPtr<_, Local2> = AtomicPtr::from(Box::new(42));
+///
+///     let mut hp_x = HazardPointer::new_in_domain(&LOCAL);
+///     let mut hp_y = HazardPointer::new_in_domain(&LOCAL2);
+///
+///     x.safe_load(&mut hp_x);
+/// }
+/// ```
+/// ```rust,compile_fail
+/// # struct DataStructure;
+/// # use haphazard::{HazardPointer, AtomicPtr, static_unique_domain};
+/// static_unique_domain!(static LOCAL: Domain<Local>);
+/// static_unique_domain!(static LOCAL2: Domain<Local2>);
+/// fn main() {
+///     let x: AtomicPtr<_, Local> = AtomicPtr::from(Box::new(42));
+///     let y: AtomicPtr<_, Local2> = AtomicPtr::from(Box::new(42));
+///
+///     let mut hp_x = HazardPointer::new_in_domain(&LOCAL);
+///     let mut hp_y = HazardPointer::new_in_domain(&LOCAL2);
+///
+///     x.safe_load(&mut hp_y);
+/// }
 /// ```
 #[doc(hidden)]
-fn compile_fail_tests() {}
+pub fn static_unique_domain_cannot_retire_pointer_in_different_domain() {}
 
 // Macro to make new const only when not in loom.
 macro_rules! new {
@@ -284,7 +301,7 @@ macro_rules! new {
         /// _family_ (the type `F`) with an object protected by a domain in a different family.
         /// However, it does _not_ protect you from mixing up domains with the same family type.
         /// Therefore, prefer creating domains with [`unique_domain`] or [`static_unique_domain`] where
-        /// possible, since it guarantees a unique `F` for every domain.
+        /// possible, since type guarantee a unique `F` for every domain.
         ///
         /// See the [`Domain`] documentation for more details.
         pub $($decl)*(_: &'_ F) -> Self {

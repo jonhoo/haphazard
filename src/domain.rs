@@ -928,6 +928,12 @@ mod tests {
     use core::{ptr::null_mut, sync::atomic::Ordering};
 
     #[test]
+    fn create_multiple_unique_domains() {
+        let domain_1 = unique_domain!();
+        let domain_2 = unique_domain!();
+    }
+
+    #[test]
     fn acquire_many_skips_used_nodes() {
         let domain = Domain::new(&());
         let rec1 = domain.acquire();

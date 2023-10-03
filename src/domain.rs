@@ -301,7 +301,7 @@ macro_rules! new {
         /// _family_ (the type `F`) with an object protected by a domain in a different family.
         /// However, it does _not_ protect you from mixing up domains with the same family type.
         /// Therefore, prefer creating domains with [`unique_domain`] or [`static_unique_domain`] where
-        /// possible, since type guarantee a unique `F` for every domain.
+        /// possible, since they guarantee a unique `F` for every domain.
         ///
         /// See the [`Domain`] documentation for more details.
         pub $($decl)*(_: &'_ F) -> Self {

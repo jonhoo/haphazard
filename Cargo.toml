@@ -1,6 +1,6 @@
 [package]
 name = "haphazard"
-version = "0.1.6"
+version = "0.1.7"
 authors = ["Jon Gjengset <jon@thesquareplanet.com>"]
 edition = "2021"
 license = "Apache-2.0"

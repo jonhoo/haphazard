@@ -123,6 +123,13 @@ impl<T> WithMut<T> for core::sync::atomic::AtomicPtr<T> {
 /// aliases](https://github.com/rust-lang/rust/issues/63063)), which makes it difficult to store in
 /// other types.
 ///
+/// In some cases, [`static_unique_domain`] can provide a convenient alternative. This macro makes
+/// it possible to declare a static domain with a namable family. This makes it possible to create
+/// additional static domains. Domains declared with this macro are always held by a static
+/// variable, which limits their usefulness somewhat, but it can allow more ergonomic use since
+/// [`HazardPointer`]s and [`AtomicPtr`]s in this domain can be stored in structs. See the
+/// documentation for [`static_unique_domain`] for an example.
+///
 /// ## Reclamation
 ///
 /// Domains are the coordination mechanism used for reclamation. When an object is retired into a
@@ -133,12 +140,12 @@ impl<T> WithMut<T> for core::sync::atomic::AtomicPtr<T> {
 /// reclaimed (i.e., [`drop`](core::mem::drop) is called). And if there are no more retires, the
 /// objects may not be reclaimed until the owning domain is itself dropped.
 ///
-/// When using the [global domain](Global) to guard data access in your data structure, keep in
-/// mind that there is no guarantee that retired objects will be cleaned up by the time your data
-/// structure is dropped. As a result, you may need to require that the data you store in said data
-/// structure be `'static`. If you wish to avoid that bound, you'll need to construct your own
-/// `Domain` for each instance of your data structure so that all the guarded data is reclaimed
-/// when your data structure is dropped.
+/// When using the [global domain](Global) (or a [`static_unique_domain`]) to guard data access in
+/// your data structure, keep in mind that there is no guarantee that retired objects will be
+/// cleaned up by the time your data structure is dropped. As a result, you may need to require
+/// that the data you store in said data structure be `'static`. If you wish to avoid that bound,
+/// you'll need to construct your own `Domain` for each instance of your data structure so that all
+/// the guarded data is reclaimed when your data structure is dropped.
 pub struct Domain<F> {
     hazptrs: HazPtrRecords,
     untagged: [RetiredList; NUM_SHARDS],
@@ -181,6 +188,110 @@ macro_rules! unique_domain {
     }};
 }
 
+/// Generate a static [`Domain`] with an entirely unique domain family.
+///
+/// Usage: `static_unique_domain!(static DOMAIN: Domain<Family>);`
+///
+/// This macro is useful when you want to store a domain in a static variable, and makes it
+/// possible to name the Domain. The generated family implements [`Singleton`], which enables
+/// the use of [`AtomicPtr::safe_load`](crate::AtomicPtr::safe_load). This means it's impossible to
+/// construct an instance of Family outside of this macro, despite the ability to name the Family
+/// Type.
+///
+/// This is useful since it allows you to store the [`HazardPointer`]s aquired from this domain, since
+/// the Family type can now be named.
+///
+/// ```rust
+/// # struct DataStructure;
+/// # use haphazard::{HazardPointer, AtomicPtr, static_unique_domain};
+/// static_unique_domain!(static LOCAL: Domain<Local>);
+///
+/// struct ContainsHazardPointers<'domain> {
+///     haz_ptr: HazardPointer<'domain, Local>,
+///     val: AtomicPtr<DataStructure, Local>,
+/// }
+///
+/// impl ContainsHazardPointers<'_> {
+///     fn read(&mut self) -> Option<&DataStructure> {
+///         self.val.safe_load(&mut self.haz_ptr)
+///     }
+/// }
+/// # fn main() {}
+/// ```
+///
+/// # Notes
+///
+/// This macro cannot be used in a function scope or impl block. This macro (at least currently)
+/// requires the ability to define a module, and therefore must be placed in module scope. This
+/// may be relaxed in the future, but hopefully shouldn't be exteneded.
+///
+/// This also restricts the ability to define a struct or module with the same name as the static
+/// variable, or the family.
+#[macro_export]
+macro_rules! static_unique_domain {
+    ($v:vis static $domain:ident: Domain<$family:ident>) => {
+        #[allow(non_snake_case)]
+        mod $domain {
+            pub struct $family {
+                _inner: (),
+            }
+            // Safety: $family can only be constructed by this module, since it contains private
+            // members.
+            unsafe impl $crate::Singleton for $family {}
+            pub static $domain: $crate::Domain<$family> = $crate::Domain::new(&$family {
+                _inner: (),
+            });
+        }
+        $v use $domain::$family;
+        $v use $domain::$domain;
+    };
+}
+
+/// ```rust,compile_fail
+/// # struct DataStructure;
+/// # use haphazard::{HazardPointer, AtomicPtr, static_unique_domain};
+/// static_unique_domain!(static LOCAL: Domain<Local>);
+/// static BROKEN: Domain<Local> = Domain::new(&Local {
+///     _inner: LOCAL::UniqueFamily,
+/// });
+/// # fn main() {}
+/// ```
+#[doc(hidden)]
+pub fn static_unique_domain_inner_type_is_unnamable() {}
+
+/// ```rust
+/// # struct DataStructure;
+/// # use haphazard::{HazardPointer, AtomicPtr, static_unique_domain};
+/// static_unique_domain!(static LOCAL: Domain<Local>);
+/// static_unique_domain!(static LOCAL2: Domain<Local2>);
+/// fn main() {
+///     let x: AtomicPtr<_, Local> = AtomicPtr::from(Box::new(42));
+///     let y: AtomicPtr<_, Local2> = AtomicPtr::from(Box::new(42));
+///
+///     let mut hp_x = HazardPointer::new_in_domain(&LOCAL);
+///     let mut hp_y = HazardPointer::new_in_domain(&LOCAL2);
+///
+///     x.safe_load(&mut hp_x);
+/// }
+/// ```
+/// ```rust,compile_fail
+/// # struct DataStructure;
+/// # use haphazard::{HazardPointer, AtomicPtr, static_unique_domain};
+/// static_unique_domain!(static LOCAL: Domain<Local>);
+/// static_unique_domain!(static LOCAL2: Domain<Local2>);
+/// fn main() {
+///     let x: AtomicPtr<_, Local> = AtomicPtr::from(Box::new(42));
+///     let y: AtomicPtr<_, Local2> = AtomicPtr::from(Box::new(42));
+///
+///     let mut hp_x = HazardPointer::new_in_domain(&LOCAL);
+///     let mut hp_y = HazardPointer::new_in_domain(&LOCAL2);
+///
+///     x.safe_load(&mut hp_y);
+/// }
+/// ```
+#[doc(hidden)]
+pub fn static_unique_domain_cannot_retire_pointer_in_different_domain() {}
+
 // Macro to make new const only when not in loom.
 macro_rules! new {
     ($($decl:tt)*) => {
@@ -189,8 +300,8 @@ macro_rules! new {
         /// The type checker protects you from accidentally using a `HazardPointer` from one domain
         /// _family_ (the type `F`) with an object protected by a domain in a different family.
         /// However, it does _not_ protect you from mixing up domains with the same family type.
-        /// Therefore, prefer creating domains with [`unique_domain`] where possible, since it
-        /// guarantees a unique `F` for every domain.
+        /// Therefore, prefer creating domains with [`unique_domain`] or [`static_unique_domain`] where
+        /// possible, since they guarantee a unique `F` for every domain.
         ///
         /// See the [`Domain`] documentation for more details.
         pub $($decl)*(_: &'_ F) -> Self {

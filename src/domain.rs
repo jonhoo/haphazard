@@ -181,10 +181,13 @@ impl Domain<Global> {
 #[macro_export]
 macro_rules! unique_domain {
     () => {{
-        struct UniqueFamily;
-        // Safety: nowhere else can construct an instance of UniqueFamily to pass to Domain::new.
-        unsafe impl Singleton for UniqueFamily {}
-        Domain::new(&UniqueFamily)
+        fn create_domain() -> Domain<impl Singleton> {
+            struct UniqueFamily;
+            // Safety: nowhere else can construct an instance of UniqueFamily to pass to Domain::new.
+            unsafe impl Singleton for UniqueFamily {}
+            Domain::new(&UniqueFamily)
+        }
+        create_domain()
     }};
 }
 
@@ -1021,10 +1024,26 @@ struct CannotConfuseGlobalReader;
 #[cfg(doctest)]
 struct CannotConfuseAcrossFamilies;
 
+/// Ensures the inner type (`UniqueFamily`) defined by unique_domain!() is not namable.
+/// ```compile_fail
+/// use haphazard::*;
+/// let dw = unique_domain!();
+/// let bad_dw = Domain::new(&UniqueFamily);
+/// ```
+#[cfg(doctest)]
+struct CannotNameInnerType;
+
 #[cfg(test)]
 mod tests {
     use super::Domain;
     use core::{ptr::null_mut, sync::atomic::Ordering};
+
+    #[test]
+    fn create_multiple_unique_domains() {
+        use crate::Singleton;
+        let domain_1 = unique_domain!();
+        let domain_2 = unique_domain!();
+    }
 
     #[test]
     fn acquire_many_skips_used_nodes() {

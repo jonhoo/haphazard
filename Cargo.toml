@@ -19,10 +19,15 @@ default = ["std"]
 [dependencies]
 
 [target.'cfg(loom)'.dependencies]
-loom = "0.5.5"
+loom = "0.7.1"
 
 [dev-dependencies]
-criterion = "0.3.1"
+criterion = { version = "0.5.1", features = ["html_reports"] }
+
+# for -Zminimal-versions
+[target.'cfg(any())'.dependencies]
+regex = { version = "1.6", optional = true }
+serde = { version = "1.0.100", optional = true }
 
 [lib]
 bench = false

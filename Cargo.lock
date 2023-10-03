@@ -235,6 +235,8 @@ version = "0.1.7"
 dependencies = [
  "criterion",
  "loom",
+ "regex",
+ "serde",
 ]
 
 [[package]]

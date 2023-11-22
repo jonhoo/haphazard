@@ -252,7 +252,7 @@ impl<'domain, F> HazardPointer<'domain, F> {
     /// slot and validate that the pointer hasn't already been retired. For synchronization, the
     /// library offers an [`asymmetric_light_barrier`] function. It enables reclaiming threads
     /// to acknowledge the preceding protection.
-    /// 
+    ///
     /// Manual pointer protection and validation involve the following steps:
     ///
     /// 1. Acquire a pointer `p`, and manually protect it with a [`HazardPointer`] by calling
@@ -265,7 +265,7 @@ impl<'domain, F> HazardPointer<'domain, F> {
     /// The strategy to validate whether `p` is retired would depend on the semantics of
     /// the data structures or algorithms. For example, in Harris-Michael linked lists, validation
     /// can be done by reloading the pointer from the [`AtomicPtr`] and ensuring that the its
-    /// value has not change. This stratege works because unlinking the node from its predecessor
+    /// value has not changed. This strategy works because unlinking the node from its predecessor
     /// strictly *happens before* the retirement of that node under the data structure's semantics.
     ///
     /// # Example
@@ -300,7 +300,7 @@ impl<'domain, F> HazardPointer<'domain, F> {
     ///
     /// let mut hp1 = HazardPointer::default();
     /// let mut hp2 = HazardPointer::default();
-    /// 
+    ///
     /// let (n1, n2) = loop {
     ///     // The first node can be loaded in a conventional way.
     ///     let n1 = head.safe_load(&mut hp1).expect("The first node must exist");

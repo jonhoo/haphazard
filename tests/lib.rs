@@ -17,14 +17,8 @@ fn acquires_multiple() {
 
     let domain = Domain::new(&());
 
-    let x = AtomicPtr::new(Box::into_raw(Box::new((
-        42,
-        CountDrops(Arc::clone(&drops_42)),
-    ))));
-    let y = AtomicPtr::new(Box::into_raw(Box::new((
-        42,
-        CountDrops(Arc::clone(&drops_42)),
-    ))));
+    let x = AtomicPtr::new(Box::into_raw(Box::new((42, CountDrops(Arc::clone(&drops_42))))));
+    let y = AtomicPtr::new(Box::into_raw(Box::new((42, CountDrops(Arc::clone(&drops_42))))));
 
     // As a reader:
     let mut hazptr_array = HazardPointer::many_in_domain(&domain);
@@ -77,10 +71,7 @@ fn acquires_multiple() {
 fn feels_good() {
     let drops_42 = Arc::new(AtomicUsize::new(0));
 
-    let x = AtomicPtr::new(Box::into_raw(Box::new((
-        42,
-        CountDrops(Arc::clone(&drops_42)),
-    ))));
+    let x = AtomicPtr::new(Box::into_raw(Box::new((42, CountDrops(Arc::clone(&drops_42))))));
 
     // As a reader:
     let mut h = HazardPointer::new();
@@ -166,10 +157,7 @@ fn drop_domain() {
 
     let drops_42 = Arc::new(AtomicUsize::new(0));
 
-    let x = AtomicPtr::new(Box::into_raw(Box::new((
-        42,
-        CountDrops(Arc::clone(&drops_42)),
-    ))));
+    let x = AtomicPtr::new(Box::into_raw(Box::new((42, CountDrops(Arc::clone(&drops_42))))));
 
     // As a reader:
     let mut h = HazardPointer::new_in_domain(&domain);

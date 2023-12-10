@@ -264,7 +264,7 @@ impl<'domain, F> HazardPointer<'domain, F> {
     ///
     /// The strategy to validate whether `p` is retired would depend on the semantics of
     /// the data structures or algorithms. For example, in Harris-Michael linked lists, validation
-    /// can be done by reloading the pointer from the [`AtomicPtr`] and ensuring that the its
+    /// can be done by reloading the pointer from the [`AtomicPtr`] and ensuring that its
     /// value has not changed. This strategy works because unlinking the node from its predecessor
     /// strictly *happens before* the retirement of that node under the data structure's semantics.
     ///
@@ -281,8 +281,8 @@ impl<'domain, F> HazardPointer<'domain, F> {
     /// // Let's imagine a data structure which has the following properties.
     /// //
     /// // 1. It always has exactly two nodes.
-    /// // 2. A thread may change its contents by exchanging the `head` pointer with an another
-    /// //    chain consisted of two nodes.
+    /// // 2. A thread may change its contents by exchanging the `head` pointer with another chain
+    /// //    consisting of two nodes.
     /// // 3. After a successful `compare_exchange`, the thread retires popped nodes without
     /// //    unlinking the first and the second node.
     /// //

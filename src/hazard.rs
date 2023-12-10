@@ -278,7 +278,7 @@ impl<'domain, F> HazardPointer<'domain, F> {
     ///     next: AtomicPtr<Self>,
     /// }
     ///
-    /// // Let's imagine a data structure which has the following properties.
+    /// // Let's imagine a data structure that has the following properties.
     /// //
     /// // 1. It always has exactly two nodes.
     /// // 2. A thread may change its contents by exchanging the `head` pointer with another chain

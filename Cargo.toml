@@ -4,6 +4,7 @@ version = "0.1.7"
 authors = ["Jon Gjengset <jon@thesquareplanet.com>"]
 edition = "2021"
 license = "Apache-2.0"
+rust-version = "1.60.0"
 
 description = "Dynamic memory management for lock-free data structures using hazard pointers."
 repository = "https://github.com/jonhoo/haphazard.git"

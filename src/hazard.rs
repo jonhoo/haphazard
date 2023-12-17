@@ -239,6 +239,94 @@ impl<'domain, F> HazardPointer<'domain, F> {
     ///
     /// Note that protecting a given pointer only has an effect if any thread that may drop the
     /// pointer does so through the same [`Domain`] as this hazard pointer is associated with.
+    ///
+    /// It's important to note that this function solely writes the pointer value to the hazard
+    /// pointer slot. However, this protection alone does not guarantee safety during dereferencing
+    /// due to two key reasons:
+    ///
+    /// 1. The announcement made by the hazard pointer might not be immediately visible to
+    ///    reclaiming threads, especially in a weak memory model.
+    /// 2. Concurrent threads could already have retired the pointer before the protection.
+    ///
+    /// To ensure safety, users need to appropriately synchronize the write operation on a hazard
+    /// slot and validate that the pointer hasn't already been retired. For synchronization, the
+    /// library offers an [`asymmetric_light_barrier`] function. It enables reclaiming threads
+    /// to acknowledge the preceding protection.
+    ///
+    /// Manual pointer protection and validation involve the following steps:
+    ///
+    /// 1. Acquire a pointer `p`, and manually protect it with a [`HazardPointer`] by calling
+    ///    [`HazardPointer::protect_raw`].
+    /// 2. Issue a memory barrier with [`asymmetric_light_barrier`] to enable reclaiming threads
+    ///    to recognize the preceding protection.
+    /// 3. Validate whether `p` is retired. If `p` remains guaranteed as not retired, it is safe
+    ///    for dereferencing. Otherwise, revisit step 1 and retry.
+    ///
+    /// The strategy to validate whether `p` is retired would depend on the semantics of
+    /// the data structures or algorithms. For example, in Harris-Michael linked lists, validation
+    /// can be done by reloading the pointer from the [`AtomicPtr`] and ensuring that its
+    /// value has not changed. This strategy works because unlinking the node from its predecessor
+    /// strictly *happens before* the retirement of that node under the data structure's semantics.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use haphazard::{AtomicPtr, HazardPointer, asymmetric_light_barrier};
+    ///
+    /// struct Node {
+    ///     value: usize,
+    ///     next: AtomicPtr<Self>,
+    /// }
+    ///
+    /// // Let's imagine a data structure that has the following properties.
+    /// //
+    /// // 1. It always has exactly two nodes.
+    /// // 2. A thread may change its contents by exchanging the `head` pointer with another chain
+    /// //    consisting of two nodes.
+    /// // 3. After a successful `compare_exchange`, the thread retires popped nodes without
+    /// //    unlinking the first and the second node.
+    /// //
+    /// // Note that the link between the first and the second node won't be changed
+    /// // before the retirement! For this reason, to validate the protection of the second node,
+    /// // one must reload the head pointer and confirm that it has not changed.
+    /// let head =
+    ///     AtomicPtr::from(Box::new(Node {
+    ///         value: 0,
+    ///         next: AtomicPtr::from(Box::new(Node {
+    ///             value: 1,
+    ///             next: unsafe { AtomicPtr::new(std::ptr::null_mut()) },
+    ///         })),
+    ///     }));
+    ///
+    /// let mut hp1 = HazardPointer::default();
+    /// let mut hp2 = HazardPointer::default();
+    ///
+    /// let (n1, n2) = loop {
+    ///     // The first node can be loaded in a conventional way.
+    ///     let n1 = head.safe_load(&mut hp1).expect("The first node must exist");
+    ///
+    ///     // However, the second one cannot, because of the aforementioned reasons.
+    ///     let ptr = n1.next.load_ptr();
+    ///     // 1. Announce a hazard pointer manually.
+    ///     hp2.protect_raw(ptr);
+    ///
+    ///     // 2. Synchronize with reclaimers.
+    ///     asymmetric_light_barrier();
+    ///
+    ///     // 3. Validate the second protection by reloading the head pointer.
+    ///     if n1 as *const _ == head.load_ptr().cast_const() {
+    ///         // If the link to the head node has not changed,
+    ///         // it is guaranteed that the second node is not retired yet.
+    ///
+    ///         // Safety: `ptr` is properly protected by `hp2`.
+    ///         let n2 = unsafe { &*ptr };
+    ///         break (n1, n2);
+    ///     }
+    ///
+    /// };
+    ///
+    /// // Here, `n1` and `n2` is safe for dereferencing.
+    /// ```
     pub fn protect_raw<T>(&mut self, ptr: *mut T)
     where
         F: 'static,

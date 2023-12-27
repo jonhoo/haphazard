@@ -1,9 +1,8 @@
-use crate::sync::atomic::AtomicPtr;
+use crate::sync::atomic::{self, AtomicPtr, Ordering};
 use crate::{record::HazPtrRecord, Domain};
 use core::marker::PhantomData;
 use core::mem::{ManuallyDrop, MaybeUninit};
 use core::ptr::NonNull;
-use core::sync::atomic::Ordering;
 
 #[cfg(doc)]
 use crate::*;
@@ -211,7 +210,7 @@ impl<'domain, F> HazardPointer<'domain, F> {
     {
         self.hazard.protect(ptr as *mut u8);
 
-        crate::asymmetric_light_barrier();
+        atomic::light_barrier();
 
         let ptr2 = src.load(Ordering::Acquire);
         if ptr != ptr2 {

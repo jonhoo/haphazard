@@ -36,3 +36,6 @@ bench = false
 [[bench]]
 name = "folly"
 harness = false
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }

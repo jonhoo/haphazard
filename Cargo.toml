@@ -18,6 +18,7 @@ std = []
 default = ["std"]
 
 [dependencies]
+membarrier = "0.2.2"
 
 [target.'cfg(loom)'.dependencies]
 loom = "0.7.1"

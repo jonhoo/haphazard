@@ -941,7 +941,9 @@ impl Retired {
         deleter: unsafe fn(ptr: *mut dyn Reclaim),
     ) -> Self {
         Retired {
-            ptr: unsafe { core::mem::transmute::<_, *mut (dyn Reclaim + 'static)>(ptr) },
+            ptr: unsafe {
+                core::mem::transmute::<*mut dyn Reclaim, *mut (dyn Reclaim + 'static)>(ptr)
+            },
             deleter,
             next: AtomicPtr::new(core::ptr::null_mut()),
         }

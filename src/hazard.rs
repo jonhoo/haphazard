@@ -355,7 +355,7 @@ impl<'domain, F, const N: usize> HazardPointerArray<'domain, F, N> {
     }
 }
 
-impl<'domain, F, const N: usize> Drop for HazardPointerArray<'domain, F, N> {
+impl<F, const N: usize> Drop for HazardPointerArray<'_, F, N> {
     fn drop(&mut self) {
         self.reset_protection();
         let domain = self.haz_ptrs[0].domain;

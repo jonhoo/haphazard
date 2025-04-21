@@ -214,7 +214,7 @@ impl<'domain, F> HazardPointer<'domain, F> {
         crate::asymmetric_light_barrier();
 
         let ptr2 = src.load(Ordering::Acquire);
-        if ptr != ptr2 {
+        if !core::ptr::eq(ptr, ptr2) {
             self.hazard.reset();
             Err(ptr2)
         } else {

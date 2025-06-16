@@ -294,17 +294,7 @@ impl<'domain, F, const N: usize> HazardPointerArray<'domain, F, N> {
     /// unusable. The borrow checker knows that individual elements in a `[_; N]` are distinct, and
     /// can be borrowed individually, but does not know that that is the case for `SomeType[i]`.
     pub fn as_refs<'array>(&'array mut self) -> [&'array mut HazardPointer<'domain, F>; N] {
-        // TODO: replace with `self.haz_ptrs.each_mut().map(|v| &mut **v)` when each_mut stabilizes
-
-        let mut out: [MaybeUninit<&'array mut HazardPointer<'domain, F>>; N] =
-            [(); N].map(|_| MaybeUninit::uninit());
-
-        for (i, hazptr) in self.haz_ptrs.iter_mut().enumerate() {
-            out[i].write(hazptr);
-        }
-
-        // Safety: we have initialized every element of the array with our for loop above
-        out.map(|maybe_uninit| unsafe { maybe_uninit.assume_init() })
+        self.haz_ptrs.each_mut().map(|v| &mut **v)
     }
 
     /// Protect the value loaded from each [`AtomicPtr`], and dereference each one to `&T`.

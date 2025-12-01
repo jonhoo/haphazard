@@ -23,7 +23,7 @@ default = ["std"]
 loom = "0.7.1"
 
 [dev-dependencies]
-criterion = { version = "0.5.1", features = ["html_reports"] }
+criterion = { version = "0.8.0", features = ["html_reports"] }
 
 # for -Zminimal-versions
 [target.'cfg(any())'.dependencies]

@@ -19,7 +19,7 @@ jobs:
       matrix:
         target: [thumbv7m-none-eabi, aarch64-unknown-none]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: true
       - name: Install stable

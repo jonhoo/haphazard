@@ -143,7 +143,18 @@ mod pointer;
 mod record;
 mod sync;
 
-fn asymmetric_light_barrier() {
+/// Issue a memory barrier to announce a protection to reclaiming threads.
+///
+/// In most cases, you do not need to use this function, because [`AtomicPtr::safe_load`] and all
+/// protection methods of [`HazardPointer`] except [`HazardPointer::protect_raw`] properly protect
+/// a pointer and internally call this function to validate protection.
+///
+/// However, in specific data structures or algorithms requiring manual pointer protection using
+/// [`HazardPointer::protect_raw`], this function can be used to manually synchronize the memory
+/// writes with reclaiming threads.
+///
+/// See also [`HazardPointer::protect_raw`].
+pub fn asymmetric_light_barrier() {
     // TODO: if cfg!(linux) {
     // https://github.com/facebook/folly/blob/bd600cd4e88f664f285489c76b6ad835d8367cd2/folly/portability/Asm.h#L28
     crate::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);

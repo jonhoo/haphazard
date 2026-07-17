@@ -17,14 +17,8 @@ fn acquires_multiple() {
 
     let domain = Domain::new(&());
 
-    let x = AtomicPtr::new(Box::into_raw(Box::new((
-        42,
-        CountDrops(Arc::clone(&drops_42)),
-    ))));
-    let y = AtomicPtr::new(Box::into_raw(Box::new((
-        42,
-        CountDrops(Arc::clone(&drops_42)),
-    ))));
+    let x = AtomicPtr::new(Box::into_raw(Box::new((42, CountDrops(Arc::clone(&drops_42))))));
+    let y = AtomicPtr::new(Box::into_raw(Box::new((42, CountDrops(Arc::clone(&drops_42))))));
 
     // As a reader:
     let mut hazptr_array = HazardPointer::many_in_domain(&domain);
@@ -77,10 +71,7 @@ fn acquires_multiple() {
 fn feels_good() {
     let drops_42 = Arc::new(AtomicUsize::new(0));
 
-    let x = AtomicPtr::new(Box::into_raw(Box::new((
-        42,
-        CountDrops(Arc::clone(&drops_42)),
-    ))));
+    let x = AtomicPtr::new(Box::into_raw(Box::new((42, CountDrops(Arc::clone(&drops_42))))));
 
     // As a reader:
     let mut h = HazardPointer::new();
@@ -166,10 +157,7 @@ fn drop_domain() {
 
     let drops_42 = Arc::new(AtomicUsize::new(0));
 
-    let x = AtomicPtr::new(Box::into_raw(Box::new((
-        42,
-        CountDrops(Arc::clone(&drops_42)),
-    ))));
+    let x = AtomicPtr::new(Box::into_raw(Box::new((42, CountDrops(Arc::clone(&drops_42))))));
 
     // As a reader:
     let mut h = HazardPointer::new_in_domain(&domain);
@@ -232,4 +220,94 @@ fn hazardptr_compare_exchange_fail() {
     assert_eq!(new_ptr, result.as_ref() as *const _);
 
     let _ = unsafe { Box::from_raw(not_current) };
+}
+
+#[test]
+fn manual_validation() {
+    struct Node {
+        value: usize,
+        next: haphazard::AtomicPtr<Self>,
+    }
+
+    // Let's imagine a data structure which has the following properties.
+    //
+    // 1. It always has exactly two nodes.
+    // 2. A thread may change its contents by exchanging the `head` pointer with an another
+    //    chain consisted of two nodes.
+    // 3. After a successful `compare_exchange`, the thread retires popped nodes without unlinking
+    //    the first and the second node.
+    //
+    // Note that the link between the first and the second node won't be changed
+    // before the retirement! For this reason, to validate the protection for the second node,
+    // one must reload the head pointer and confirm that it has not changed.
+    let head =
+        haphazard::AtomicPtr::from(Box::new(Node {
+            value: 0,
+            next: haphazard::AtomicPtr::from(Box::new(Node {
+                value: 1,
+                next: unsafe { haphazard::AtomicPtr::new(std::ptr::null_mut()) },
+            })),
+        }));
+
+    const THREADS: usize = 8;
+    const ITERS: usize = 512;
+
+    std::thread::scope(|s| {
+        for _ in 0..THREADS {
+            s.spawn(|| {
+                let mut hp1 = HazardPointer::default();
+                let mut hp2 = HazardPointer::default();
+                for _ in 0..ITERS {
+                    loop {
+                        let (n1, n2) = loop {
+                            // The first node can be loaded in a conventional way.
+                            let n1 = head.safe_load(&mut hp1).expect("The first node must exist");
+
+                            let ptr = n1.next.load_ptr();
+                            hp2.protect_raw(ptr);
+
+                            // Synchronize with reclaimers.
+                            asymmetric_light_barrier();
+
+                            // Validate the second protection by reloading the head pointer.
+                            if n1 as *const _ == head.load_ptr().cast_const() {
+                                // Safety: Because the head pointer did not change,
+                                // the two nodes are not retired, and the previous
+                                // protection is valid!
+                                let n2 = unsafe { &*ptr };
+                                break (n1, n2);
+                            }
+                        };
+
+                        let next = Box::new(Node {
+                            value: n1.value + 1,
+                            next: haphazard::AtomicPtr::from(Box::new(Node {
+                                value: n2.value + 1,
+                                next: unsafe { haphazard::AtomicPtr::new(std::ptr::null_mut()) },
+                            })),
+                        });
+                        if head
+                            .compare_exchange(n1 as *const _ as *mut Node, next)
+                            .is_ok()
+                        {
+                            // Safety: As we won the race of exchanging the head node,
+                            // they have not already been retired.
+                            unsafe {
+                                Domain::global()
+                                    .retire_ptr::<_, Box<_>>(n1 as *const _ as *mut Node);
+                                Domain::global()
+                                    .retire_ptr::<_, Box<_>>(n2 as *const _ as *mut Node);
+                            }
+                            break;
+                        }
+                    }
+                }
+            });
+        }
+    });
+
+    let n1 = unsafe { Box::from_raw(head.into_inner()) };
+    let n2 = unsafe { Box::from_raw(n1.next.into_inner()) };
+    assert_eq!(n1.value, THREADS * ITERS);
+    assert_eq!(n2.value, THREADS * ITERS + 1);
 }

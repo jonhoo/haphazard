@@ -1093,8 +1093,8 @@ mod tests {
     #[test]
     fn create_multiple_unique_domains() {
         use crate::Singleton;
-        let domain_1 = unique_domain!();
-        let domain_2 = unique_domain!();
+        let _domain_1 = unique_domain!();
+        let _domain_2 = unique_domain!();
     }
 
     #[test]

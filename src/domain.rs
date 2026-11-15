@@ -325,6 +325,8 @@ pub fn static_unique_domain_inner_type_is_unnamable() {}
 ///     let mut hp_y = HazardPointer::new_in_domain(&LOCAL2);
 ///
 ///     x.safe_load(&mut hp_x);
+/// #   drop(unsafe { Box::from_raw(x.into_inner()) });
+/// #   drop(unsafe { Box::from_raw(y.into_inner()) });
 /// }
 /// ```
 /// ```rust,compile_fail

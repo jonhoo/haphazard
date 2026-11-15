@@ -1,1 +1,4 @@
-leak:Count::test_local
+# `Count::test_local` intentionally leaks a `Box` to get a `&'static Count`.
+# The `*` lets this match both the legacy symbol name (`folly::Count::test_local`)
+# and the v0 one (`<folly::Count>::test_local`).
+leak:Count*::test_local

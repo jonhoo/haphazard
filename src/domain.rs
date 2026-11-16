@@ -1,10 +1,9 @@
 use crate::raw::{Pointer, Reclaim};
 use crate::record::HazPtrRecord;
-use crate::sync::atomic::{AtomicIsize, AtomicPtr, AtomicUsize};
+use crate::sync::atomic::{self, AtomicIsize, AtomicPtr, AtomicUsize, Ordering};
 use alloc::boxed::Box;
 use alloc::collections::BTreeSet;
 use core::marker::PhantomData;
-use core::sync::atomic::Ordering;
 
 #[cfg(doc)]
 use crate::*;
@@ -634,7 +633,7 @@ impl<F> Domain<F> {
             "only single item retiring is supported atm"
         );
 
-        crate::asymmetric_light_barrier();
+        atomic::light_barrier();
 
         let retired = Box::into_raw(retired);
         unsafe { self.untagged[Self::calc_shard(retired)].push(retired, retired) };
@@ -723,7 +722,7 @@ impl<F> Domain<F> {
             }
 
             if !empty {
-                crate::asymmetric_heavy_barrier(crate::HeavyBarrierKind::Expedited);
+                atomic::heavy_barrier();
 
                 // Find all guarded addresses.
                 #[allow(clippy::mutable_key_type)]
